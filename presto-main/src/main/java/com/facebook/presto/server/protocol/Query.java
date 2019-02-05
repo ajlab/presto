@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.server.protocol;
 
+import com.acache.client.ACache;
 import com.facebook.presto.Session;
 import com.facebook.presto.client.Column;
 import com.facebook.presto.client.FailureInfo;
@@ -154,6 +155,9 @@ class Query
     @GuardedBy("this")
     private Long updateCount;
 
+    @GuardedBy("this")
+    private ACache acache;
+
     public static Query create(
             SessionContext sessionContext,
             String query,
@@ -209,6 +213,7 @@ class Query
         this.resultsProcessorExecutor = resultsProcessorExecutor;
         this.timeoutExecutor = timeoutExecutor;
         this.blockEncodingSerde = blockEncodingSerde;
+        acache = new ACache();
     }
 
     public boolean isSubmissionFinished()
@@ -497,6 +502,7 @@ class Query
                 updateCount);
 
         cacheLastResults(queryResults);
+        acache.cacheLastResults(queryResults);
         return queryResults;
     }
 

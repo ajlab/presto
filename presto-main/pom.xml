@@ -385,6 +385,12 @@
             <groupId>com.facebook.presto</groupId>
             <artifactId>presto-plugin-toolkit</artifactId>
         </dependency>
+        <dependency>
+            <groupId>com.acache.client</groupId>
+            <artifactId>presto-acache</artifactId>
+            <version>0.217-SNAPSHOT</version>
+        </dependency>
+
     </dependencies>
 
     <build>
