@@ -143,6 +143,7 @@ public class TestServer
                 .build();
 
         QueryResults queryResults = client.execute(request, createJsonResponseHandler(QUERY_RESULTS_CODEC));
+        System.out.println("this is outside infinite loop");
 
         ImmutableList.Builder<List<Object>> data = ImmutableList.builder();
         while (queryResults.getNextUri() != null) {

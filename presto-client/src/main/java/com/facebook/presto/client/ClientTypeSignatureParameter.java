@@ -17,6 +17,7 @@ import com.facebook.presto.spi.type.NamedTypeSignature;
 import com.facebook.presto.spi.type.ParameterKind;
 import com.facebook.presto.spi.type.TypeSignatureParameter;
 import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.databind.DeserializationContext;
@@ -87,6 +88,7 @@ public class ClientTypeSignatureParameter
         return target.cast(value);
     }
 
+    @JsonIgnore
     public ClientTypeSignature getTypeSignature()
     {
         return getValue(ParameterKind.TYPE, ClientTypeSignature.class);
@@ -97,6 +99,7 @@ public class ClientTypeSignatureParameter
         return getValue(ParameterKind.LONG, Long.class);
     }
 
+    @JsonIgnore
     public NamedTypeSignature getNamedTypeSignature()
     {
         return getValue(ParameterKind.NAMED_TYPE, NamedTypeSignature.class);

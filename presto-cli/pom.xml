@@ -14,9 +14,11 @@
     <properties>
         <air.main.basedir>${project.parent.basedir}</air.main.basedir>
         <main-class>com.facebook.presto.cli.Presto</main-class>
+        <air.check.fail-duplicate-finder>false</air.check.fail-duplicate-finder>
     </properties>
 
     <dependencies>
+
         <dependency>
             <groupId>com.facebook.presto</groupId>
             <artifactId>presto-spi</artifactId>
@@ -76,6 +78,7 @@
         <dependency>
             <groupId>jline</groupId>
             <artifactId>jline</artifactId>
+            <version>2.14.6</version>
         </dependency>
 
         <dependency>
@@ -91,6 +94,13 @@
         <dependency>
             <groupId>com.squareup.okhttp3</groupId>
             <artifactId>okhttp</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.python</groupId>
+            <artifactId>jython-standalone</artifactId>
+            <version>2.7.1</version>
+            <scope>runtime</scope>
         </dependency>
 
         <!-- for testing -->

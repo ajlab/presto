@@ -16,6 +16,7 @@ package com.facebook.presto.client;
 import com.facebook.presto.spi.PrestoWarning;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.google.common.collect.ImmutableList;
 
 import javax.annotation.Nullable;
@@ -143,6 +144,7 @@ public class QueryResults
     @Nullable
     @JsonProperty
     @Override
+    @JsonSerialize(as = Iterable.class)
     public Iterable<List<Object>> getData()
     {
         return data;

@@ -190,7 +190,10 @@ public class StatementResource
             proto = uriInfo.getRequestUri().getScheme();
         }
 
+        long start = System.currentTimeMillis();
         asyncQueryResults(query, OptionalLong.of(token), maxWait, targetResultSize, uriInfo, proto, asyncResponse);
+        double timeTaken = (System.currentTimeMillis() - start) / 1000.0;
+        System.out.println("time taken: " + timeTaken);
     }
 
     private void asyncQueryResults(

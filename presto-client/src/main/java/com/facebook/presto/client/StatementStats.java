@@ -14,6 +14,7 @@
 package com.facebook.presto.client;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import javax.annotation.Nullable;
@@ -182,7 +183,7 @@ public class StatementStats
         return rootStage;
     }
 
-    @JsonProperty
+    @JsonIgnore
     public OptionalDouble getProgressPercentage()
     {
         if (!scheduled || totalSplits == 0) {

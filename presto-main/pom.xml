@@ -389,6 +389,18 @@
             <groupId>com.acache.client</groupId>
             <artifactId>presto-acache</artifactId>
             <version>0.217-SNAPSHOT</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.python</groupId>
+                    <artifactId>jython-standalone</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>org.python</groupId>
+            <artifactId>jython-standalone</artifactId>
+            <version>2.7.1</version>
+            <scope>runtime</scope>
         </dependency>
 
     </dependencies>
