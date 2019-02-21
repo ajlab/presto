@@ -18,20 +18,20 @@ import com.facebook.presto.spi.Plugin;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.airlift.log.Logger;
-//import org.python.core.PyInstance;
-//import org.python.util.PythonInterpreter;
 import redis.clients.jedis.BinaryJedis;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.ObjectOutput;
 import java.io.ObjectOutputStream;
+//import org.python.core.PyInstance;
+//import org.python.util.PythonInterpreter;
 
 public class ACache
         implements Plugin
 {
     private static final Logger log = Logger.get(ACache.class);
-    PythonInterpreter interpreter;
+    //PythonInterpreter interpreter;
     BinaryJedis jedis = new BinaryJedis("localhost", 6379);
     ObjectMapper om = new ObjectMapper();
     String query;
