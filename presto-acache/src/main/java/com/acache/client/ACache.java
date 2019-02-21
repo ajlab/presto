@@ -18,8 +18,8 @@ import com.facebook.presto.spi.Plugin;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.airlift.log.Logger;
-import org.python.core.PyInstance;
-import org.python.util.PythonInterpreter;
+//import org.python.core.PyInstance;
+//import org.python.util.PythonInterpreter;
 import redis.clients.jedis.BinaryJedis;
 
 import java.io.ByteArrayOutputStream;
@@ -38,9 +38,9 @@ public class ACache
 
     public ACache(String query)
     {
-        PythonInterpreter.initialize(System.getProperties(),
-                System.getProperties(), new String[0]);
-        this.interpreter = new PythonInterpreter();
+        //PythonInterpreter.initialize(System.getProperties(),
+        //        System.getProperties(), new String[0]);
+        //this.interpreter = new PythonInterpreter();
         this.query = query;
     }
 
@@ -70,13 +70,13 @@ public class ACache
         log.info("done executing file");
     }*/
 
-    public void callJythonDemo(QueryResults queryResults)
+    /*public void callJythonDemo(QueryResults queryResults)
     {
         this.interpreter.execfile("/home/jb/mac_user_dir/Documents/code/java/hello.py");
         PyInstance hello = (PyInstance) this.interpreter.eval("Hello" + "(" + "None" + ")");
         hello.invoke("run");
         log.info("done executing file");
-    }
+    }*/
 
     private byte[] serializeObj(Object obj)
     {
