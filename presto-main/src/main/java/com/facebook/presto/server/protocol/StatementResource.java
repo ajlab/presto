@@ -13,7 +13,9 @@
  */
 package com.facebook.presto.server.protocol;
 
+import com.acache.client.ACache;
 import com.facebook.presto.client.QueryResults;
+import com.facebook.presto.client.StatementStats;
 import com.facebook.presto.execution.QueryManager;
 import com.facebook.presto.memory.context.SimpleLocalMemoryContext;
 import com.facebook.presto.metadata.SessionPropertyManager;
@@ -57,10 +59,14 @@ import javax.ws.rs.core.UriInfo;
 
 import java.io.UnsupportedEncodingException;
 import java.net.URLEncoder;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.Map.Entry;
 import java.util.OptionalLong;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_ADDED_PREPARE;
@@ -104,6 +110,7 @@ public class StatementResource
     private final ScheduledExecutorService queryPurger = newSingleThreadScheduledExecutor(threadsNamed("query-purger"));
 
     private final CounterStat createQueryRequests = new CounterStat();
+    private ACache acache;
 
     @Inject
     public StatementResource(
@@ -164,6 +171,8 @@ public class StatementResource
                 timeoutExecutor,
                 blockEncodingSerde);
         queries.put(query.getQueryId(), query);
+        acache = new ACache();
+        acache.setQuery(statement);
 
         QueryResults queryResults = query.getNextResult(OptionalLong.empty(), uriInfo, proto, DEFAULT_TARGET_RESULT_SIZE);
         return toResponse(query, queryResults);
@@ -190,10 +199,12 @@ public class StatementResource
             proto = uriInfo.getRequestUri().getScheme();
         }
 
+        //System.out.println("starting query with token: " + token);
         long start = System.currentTimeMillis();
-        asyncQueryResults(query, OptionalLong.of(token), maxWait, targetResultSize, uriInfo, proto, asyncResponse);
-        double timeTaken = (System.currentTimeMillis() - start) / 1000.0;
-        System.out.println("time taken: " + timeTaken);
+        Set<Long> tokens = Collections.synchronizedSet(new HashSet<Long>());
+        asyncQueryResults(query, OptionalLong.of(token), maxWait, targetResultSize, uriInfo, proto, asyncResponse, tokens);
+        //double timeTaken = (System.currentTimeMillis() - start) / 1000.0;
+        //System.out.println("time taken: " + timeTaken + " token: " + token);
     }
 
     private void asyncQueryResults(
@@ -203,7 +214,8 @@ public class StatementResource
             DataSize targetResultSize,
             UriInfo uriInfo,
             String scheme,
-            AsyncResponse asyncResponse)
+            AsyncResponse asyncResponse,
+            Set<Long> tokens)
     {
         Duration wait = WAIT_ORDERING.min(MAX_WAIT_TIME, maxWait);
         if (targetResultSize == null) {
@@ -217,6 +229,51 @@ public class StatementResource
         ListenableFuture<Response> response = Futures.transform(queryResultsFuture, queryResults -> toResponse(query, queryResults), directExecutor());
 
         bindAsyncResponse(asyncResponse, response, responseExecutor);
+
+        if (!query.isSourceCache()) {
+           try {
+               QueryResults queryResults = queryResultsFuture.get();
+               Runnable r = () -> acacheLastResults(queryResults, tokens, token.getAsLong());
+               response.addListener(r, directExecutor());
+               //acacheLastResults(queryResultsFuture.get(), tokens, token.getAsLong());
+           } catch (InterruptedException ie) {
+               System.out.println("Exception caching results: " + ie);
+           } catch (ExecutionException ee ) {}
+           }
+    }
+
+    private synchronized void acacheLastResults(QueryResults queryResults, Set<Long> tokens, long token)
+    {
+        boolean added = tokens.add(token);
+        if (!added) {
+            return;
+        }
+        QueryResults cachedQueryResults = null;
+        if (queryResults==null || queryResults.getData() == null) {
+        }
+        else {
+            cachedQueryResults = cacheableQueryResults(queryResults);
+            acache.cacheLastResults(cachedQueryResults);
+        }
+    }
+
+    private QueryResults cacheableQueryResults(QueryResults queryResults)
+    {
+        StatementStats statementStats = new StatementStats(
+                queryResults.getStats().getState(), queryResults.getStats().isQueued(),
+                queryResults.getStats().isScheduled(),
+                queryResults.getStats().getNodes(), queryResults.getStats().getTotalSplits(),
+                0, queryResults.getStats().getRunningSplits(),
+                queryResults.getStats().getTotalSplits(), queryResults.getStats().getCpuTimeMillis(),
+                queryResults.getStats().getWallTimeMillis(), queryResults.getStats().getQueuedTimeMillis(),
+                queryResults.getStats().getElapsedTimeMillis(), queryResults.getStats().getProcessedRows(),
+                queryResults.getStats().getProcessedBytes(), queryResults.getStats().getPeakMemoryBytes(),
+                queryResults.getStats().getSpilledBytes(), queryResults.getStats().getRootStage());
+        return new QueryResults(
+                queryResults.getId(), queryResults.getInfoUri(), queryResults.getPartialCancelUri(), null,
+                queryResults.getColumns(), queryResults.getData(), statementStats, queryResults.getError(),
+                queryResults.getWarnings(), queryResults.getUpdateType(), queryResults.getUpdateCount()
+        );
     }
 
     private static Response toResponse(Query query, QueryResults queryResults)

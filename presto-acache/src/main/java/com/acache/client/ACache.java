@@ -17,6 +17,7 @@ import com.facebook.presto.client.QueryResults;
 import com.facebook.presto.spi.Plugin;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.common.collect.Iterables;
 import io.airlift.log.Logger;
 import redis.clients.jedis.BinaryJedis;
 
@@ -24,58 +25,112 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.ObjectOutput;
 import java.io.ObjectOutputStream;
-//import org.python.core.PyInstance;
-//import org.python.util.PythonInterpreter;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 
 public class ACache
         implements Plugin
 {
     private static final Logger log = Logger.get(ACache.class);
-    //PythonInterpreter interpreter;
     BinaryJedis jedis = new BinaryJedis("localhost", 6379);
     ObjectMapper om = new ObjectMapper();
     String query;
+    private int callCount;
 
-    public ACache(String query)
+    public String getQuery()
     {
-        //PythonInterpreter.initialize(System.getProperties(),
-        //        System.getProperties(), new String[0]);
-        //this.interpreter = new PythonInterpreter();
+        return this.query;
+    }
+
+    public void setQuery(String query)
+    {
         this.query = query;
     }
 
     public void cacheLastResults(QueryResults queryResults)
     {
-        byte[] keyBytes = this.query.trim().toUpperCase().getBytes();
+        byte[] keyBytes = generateSetKey();
         byte[] valueBytes = this.serializeQueryResults(queryResults);
         jedis.set(keyBytes, valueBytes);
     }
 
     public QueryResults getCachedResults()
     {
-        byte[] valueBytes = jedis.get(this.query.trim().toUpperCase().getBytes());
-        if (valueBytes == null) {
+        if (this.query == null) {
             return null;
         }
-        return this.deserializeQueryResults(valueBytes);
+        Set<byte[]> keys = this.getQueryKeys();
+        QueryResults mergedResults = mergeResults(keys);
+        if (mergedResults == null) {
+            return null;
+        }
+        return mergedResults;
     }
-    /*public void cacheLastResultsJython(QueryResults queryResults)
-    {
-        byte[] queryResultsBytes = this.serializeObj(queryResults);
-        this.interpreter.set("queryResults_bytes", queryResultsBytes);
-        this.interpreter.execfile("/home/jb/mac_user_dir/bgit/scache/integration.py");
-        PyInstance integration = (PyInstance) this.interpreter.eval("Integration" + "(" + "None" + ")");
-        PyString queryId = new PyString(queryResults.getId());
-        integration.invoke("cache_query", queryId);
-        log.info("done executing file");
-    }*/
 
-    /*public void callJythonDemo(QueryResults queryResults)
+    private byte[] generateSetKey()
     {
-        this.interpreter.execfile("/home/jb/mac_user_dir/Documents/code/java/hello.py");
-        PyInstance hello = (PyInstance) this.interpreter.eval("Hello" + "(" + "None" + ")");
-        hello.invoke("run");
-        log.info("done executing file");
+        callCount++;
+        log.info("current callCount: " + callCount);
+        StringBuilder keyBuilder = new StringBuilder(this.query);
+        keyBuilder.append('_');
+        keyBuilder.append(callCount);
+        return keyBuilder.toString().trim().toLowerCase(Locale.US).getBytes();
+    }
+
+    private byte[] generateGetKey()
+    {
+        StringBuilder keyBuilder = new StringBuilder(this.query);
+        return keyBuilder.append('*').toString().getBytes();
+    }
+
+    private Set<byte[]> getQueryKeys()
+    {
+        return jedis.keys(generateGetKey());
+    }
+
+    private QueryResults mergeResults(Set<byte[]> keys)
+    {
+        QueryResults mergedQueryResults = null;
+        for (byte[] key : keys) {
+            byte[] valueBytes = jedis.get(key);
+            if (valueBytes == null) {
+                continue;
+            }
+            QueryResults currentQueryResults = this.deserializeQueryResults(valueBytes);
+            if (mergedQueryResults == null) {
+                mergedQueryResults = currentQueryResults;
+            }
+            else {
+                mergedQueryResults = mergeQueryResults(mergedQueryResults, currentQueryResults);
+            }
+        }
+        return mergedQueryResults;
+    }
+
+    private QueryResults mergeQueryResults(QueryResults mergedQueryResults, QueryResults currentQueryResults)
+    {
+        Iterable<List<Object>> mergedQueryResultsData = mergedQueryResults.getData();
+        Iterable<List<Object>> mergedData = Iterables.concat(mergedQueryResultsData, currentQueryResults.getData());
+        //mergedData = deduplicateIterable(mergedData);
+        QueryResults newMergedQueryResults = new QueryResults(
+                mergedQueryResults.getId(), mergedQueryResults.getInfoUri(), mergedQueryResults.getPartialCancelUri(), null,
+                mergedQueryResults.getColumns(), mergedData, mergedQueryResults.getStats(), mergedQueryResults.getError(),
+                mergedQueryResults.getWarnings(), mergedQueryResults.getUpdateType(), mergedQueryResults.getUpdateCount());
+        return newMergedQueryResults;
+    }
+
+    /* TODO: Fix or Remove.
+    private Iterable<List<Object>> deduplicateIterable(Iterable<List<Object>> mergedData)
+    {
+        Iterable<List<Object>> deduplicatedIterable = new ArrayList<List<Object>>();
+        List<List<Object>> deduplicatedIterableList = (List<List<Object>>) deduplicatedIterable;
+        mergedData.forEach(e -> {
+            if (!deduplicatedIterableList.contains(e)) {
+                deduplicatedIterableList.add(e);
+            }
+        });
+        return deduplicatedIterable;
     }*/
 
     private byte[] serializeObj(Object obj)
@@ -127,12 +182,4 @@ public class ACache
         }
         return null;
     }
-/*
-    private PyObject queryResultsToPyObject(QueryResults queryResults)
-    {
-        HashMap<String, PyObject> qr = new HashMap<String, PyObject>();
-        qr.put("id", new PyString(queryResults.getId()));
-        return new PyObject;
-    }
-*/
 }

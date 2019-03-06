@@ -1,0 +1,15 @@
+Benchmarking
+Test Queries
+1) 
+Query: 
+show tables;
+Type: System
+Runtime:
+With cache: < .001
+Without cache: .02
+
+ii) 
+Query:
+select review.user_id, count(distinct review_id) from review, users where review.user_id=users.user_id group by review.user_id;
+select review.user_id, count(distinct review_id) from review, users where review.user_id=users.user_id and review.date>'2018-06-01' group by review.user_id;
+Type: 1-Join`

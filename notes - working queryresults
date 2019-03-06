@@ -1,0 +1,110 @@
+{
+  "id": "20190222_211915_00003_at6er",
+  "infoUri": "http://localhost:8080/ui/query.html?20190222_211915_00003_at6er",
+  "partialCancelUri": "http://172.16.20.91:8080/v1/stage/20190222_211915_00003_at6er.0",
+  "nextUri": "http://localhost:8080/v1/statement/20190222_211915_00003_at6er/4",
+  "columns": [
+    {
+      "name": "Table",
+      "type": "varchar",
+      "typeSignature": {
+        "rawType": "varchar",
+        "typeArguments": [],
+        "literalArguments": [],
+        "arguments": [
+          {
+            "kind": "LONG_LITERAL",
+            "value": 2147483647,
+            "longLiteral": 2147483647
+          }
+        ]
+      }
+    }
+  ],
+  "data": [
+    [
+      "business"
+    ],
+    [
+      "checkin"
+    ],
+    [
+      "review"
+    ],
+    [
+      "tip"
+    ],
+    [
+      "users"
+    ]
+  ],
+  "stats": {
+    "state": "RUNNING",
+    "queued": false,
+    "scheduled": true,
+    "nodes": 1,
+    "totalSplits": 19,
+    "queuedSplits": 0,
+    "runningSplits": 1,
+    "completedSplits": 18,
+    "cpuTimeMillis": 18,
+    "wallTimeMillis": 2504,
+    "queuedTimeMillis": 507,
+    "elapsedTimeMillis": 19647,
+    "processedRows": 5,
+    "processedBytes": 114,
+    "peakMemoryBytes": 0,
+    "spilledBytes": 0,
+    "rootStage": {
+      "stageId": "0",
+      "state": "RUNNING",
+      "done": false,
+      "nodes": 1,
+      "totalSplits": 1,
+      "queuedSplits": 0,
+      "runningSplits": 1,
+      "completedSplits": 0,
+      "cpuTimeMillis": 0,
+      "wallTimeMillis": 3,
+      "processedRows": 0,
+      "processedBytes": 0,
+      "subStages": [
+        {
+          "stageId": "1",
+          "state": "FINISHED",
+          "done": true,
+          "nodes": 1,
+          "totalSplits": 17,
+          "queuedSplits": 0,
+          "runningSplits": 0,
+          "completedSplits": 17,
+          "cpuTimeMillis": 15,
+          "wallTimeMillis": 2480,
+          "processedRows": 5,
+          "processedBytes": 80,
+          "subStages": [
+            {
+              "stageId": "2",
+              "state": "FINISHED",
+              "done": true,
+              "nodes": 1,
+              "totalSplits": 1,
+              "queuedSplits": 0,
+              "runningSplits": 0,
+              "completedSplits": 1,
+              "cpuTimeMillis": 3,
+              "wallTimeMillis": 21,
+              "processedRows": 5,
+              "processedBytes": 114,
+              "subStages": []
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "error": null,
+  "warnings": [],
+  "updateType": null,
+  "updateCount": null
+}

@@ -1,0 +1,11 @@
+Presto Concepts
+
+Query: When Presto parses a statement, it converts it into a query and creates a distributed query plan which is then realized as a series of interconnected stages running on Presto workers. When you retieve information about a query in Presto, you receive the snapshot of every component that is involved in producing a result set in response to a statement. 
+Difference between statement and query: statement is an SQL text that is passed to Presto, while the Query refers to the configuration and components instantiated to execute that statement. A query encompasses stages, tasks, splits, connectors, and other components and data sources working in concert to produce a result.
+
+Coordinator: is the server that is responsible for parsing statements, planning queries, and managing Presto worker nodes. 
+It is the node to which a client connects to submit statements for execution. It keeps track of activity on each worker and coordinates the execution of a query. 
+It creates a logical model of a query involving a series of stages which is then translated into a series of connected tasks running on a cluster of Presto workers. 
+Coordinators communicate with workers and clients using a REST API. 
+
+Abstract Syntax Tree (AST) is converted into the Plan Tree after analyze step. There is no seperation between LogicalPlan and ExecutionPlan so the PlanNode contains lot of optional information filled in for execution. This causes plan to be very complex, which contradicts Presto's principle of connector: hiding as much implementation details of engine from connector as possible.

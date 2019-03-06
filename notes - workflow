@@ -1,0 +1,72 @@
+Workflow
+
+Assumption (to be clarified):
+presto-client makes two HTTP requests:
+POST / > this calls StatementResource.createQuery() | TBD: calls this POST via an HTTP client/Postman.
+followed by:
+GET queryId/token > this calls StatementResource.getQueryResults()
+
+StatementResource.createQuery() -> query = Query.create(sessionContext, statement, queryManager, sessionPropertyManager, exchangeClient, responseExecutor, timeoutExecutor, blockEncodingSerde)
+Query.create(...) -> new Query(...)
+new Query(...) -> submissionFuture = new QuerySubmissionFuture(...)
+StatementResource.createQuery() -> queries.put(query.getQueryId(), query)
+StatementResource.createQuery() -> query.getNextResult(...)
+
+StatementResource.getQueryResults -> StatementResource.asyncQueryResults(query, ...)
+StatementResource.asyncQueryResults(query, ...) -> query.waitForResults(...)
+
+Query.waitForResults(...) -> Query.getFutureStateChange()
+Query.getFutureStateChange -> submissionFuture.submitQuery()
+Query.QuerySubmissionFuture.submitQuery() -> queryManager.createQuery(queryId, sessionContext, this.query)
+SQLQueryManager.createQuery(...) -> new QueryCreationFuture()
+SQLQueryManager.createQuery(...) -> createQueryInternal(...)
+SQLQueryManager.createQueryInternal(...) -> queryExecutionFactory.createQueryExecution(...)
+queryExecutionFactory.createQueryExecution(...) -> SQLQueryExecution.createQueryExecution(...)
+SQLQueryExecution.createQueryExecution(...) -> new SQLQueryExecution(...)
+SQLQueryExecution.new(...) -> QueryStateMachine.begin(...)
+SQLQueryManager.createQueryInternal(...) -> resourceGroupManager.submit(...)
+SQLQueryManager.resourceGroupManager.submit(...) -> InternalResourceGroupManager.submit(...)
+InternalResourceGroupManager.submit(...) -> InternalResourceGroup.run(ManagedQueryExecution query)
+InternalResourceGroup.run(query) -> InternalResourceGroup.startInBackground(query)
+InternalResourceGroup.startInBackground(query) -> executor.execute(query::start)
+query::start -> SQLQueryExecution.start()
+SQLQueryExecution.start() -> waitForMinimumWorkers()
+SQLQueryExecution.waitForMinimumWorkers() -> addSuccessCallback(minimumWorkerFuture, () -> queryExecutor.submit(this::startExecution))
+SQLQueryExecution.startExecution() -> SQLQueryScheduler.start()
+SQLQueryScheduler.start() -> executor.submit(this::schedule)
+SQLQueryScheduler.schedule() ->
+
+
+queryExecutor
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+
+InternalResourceGroup > Resource groups form a tree, and all access to a group is granted by the root of the tree. Queries are submitted to the leaf groups. Never to the intermediate groups. Intermediate groups aggregate resource consumption from their children, and  may have their own limitations that are enforced.
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+Paraphase
+StatementResource creates Query.
+Query creates QuerySubmissionFuture.
+QuerySubmissionFuture extends AbstractFuture of type QueryInfo.
+QuerySubmissionFuture.submitQuery() invokes queryManager.createQuery.
+queryManager.createQuery creates QueryCreationFuture
+QueryCreationFuture extends AbstractFuture of type QueryInfo.
+QueryCreationFuture 
+
+
+SQLQueryManager is responsible for creating the Query.
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+Concurrency
+Future: represents result of an asynchronous computation.
+ListenableFuture: allows you to register callbacks to be executed once the computation is complete. Basic operation added by ListenableFuture is addListener(Runnable, Executor).
+Corresponding to the JDK ExecutorService.submit(Callable) approach to initiating an asynchronous computation, Guava provides the ListeningExecutorService interface, which returns a ListenableFuture wherever ExecutorService would return normal Future. 
+AbstractFuture: Abstract implementation of ListenableFuture. This class implements all methods in ListenableFuture. Subclasses should provide a way to set the result of the computation through protected methods set(Object). Subclasses should rarely override other methods.
+ListenableFuture.transform(ListenableFuture<A>, Function<A,B>, Executor) > Returns a new ListenableFuture whose result is the product of applying the given Function to the result of the given ListenableFuture.
+java.util.concurrent.Executors.newCachedThreadPool(ThreadFactory threadFactory) > creates a thread pool that creates new threads as needed, but will use previously constructed threads when they are available, and uses the provided ThreadFactory to create the new threads when needed. 
+io.airlift.concurrent.Threads.threadsNamed > creates named threads using specified naming format.
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+State Machine
+com.facebook.presto.execution.StateMachine<T> > Simple state machine which holds a single state. Callers can register for state change events.
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+Lambda/Functional Interface
+

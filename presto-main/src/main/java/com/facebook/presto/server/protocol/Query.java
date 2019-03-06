@@ -158,6 +158,9 @@ class Query
     @GuardedBy("this")
     private ACache acache;
 
+    @GuardedBy("this")
+    private boolean sourceCache;
+
     public static Query create(
             SessionContext sessionContext,
             String query,
@@ -213,7 +216,8 @@ class Query
         this.resultsProcessorExecutor = resultsProcessorExecutor;
         this.timeoutExecutor = timeoutExecutor;
         this.blockEncodingSerde = blockEncodingSerde;
-        acache = new ACache(query);
+        acache = new ACache();
+        acache.setQuery(query);
     }
 
     public boolean isSubmissionFinished()
@@ -288,11 +292,24 @@ class Query
         return clearTransactionId;
     }
 
+    public synchronized boolean isSourceCache()
+    {
+        return sourceCache;
+    }
+
     public synchronized ListenableFuture<QueryResults> waitForResults(OptionalLong token, UriInfo uriInfo, String scheme, Duration wait, DataSize targetResultSize)
     {
         // before waiting, check if this request has already been processed and cached
         if (token.isPresent()) {
-            Optional<QueryResults> cachedResult = Optional.ofNullable(acache.getCachedResults());
+            Optional<QueryResults> cachedResult = null;
+            if (token.getAsLong() == 1) {
+                cachedResult = Optional.ofNullable(acache.getCachedResults());
+                if (cachedResult.isPresent()) {
+                    sourceCache = true;
+                }
+            } else {
+                cachedResult = getCachedResult(token.getAsLong(), uriInfo);
+            }
             //Optional<QueryResults> cachedResult = getCachedResult(token.getAsLong(), uriInfo);
             if (cachedResult.isPresent()) {
                 return immediateFuture(cachedResult.get());
@@ -362,11 +379,9 @@ class Query
 
     public synchronized QueryResults getNextResult(OptionalLong token, UriInfo uriInfo, String scheme, DataSize targetResultSize)
     {
-        log.info("getNextResult called. token: " + token + " uriInfo: " + uriInfo + " scheme: " + scheme + " targetResultSize: " + targetResultSize);
         // check if the result for the token have already been created
         if (token.isPresent()) {
-            Optional<QueryResults> cachedResult = Optional.ofNullable(acache.getCachedResults());
-            //Optional<QueryResults> cachedResult = getCachedResult(token.getAsLong(), uriInfo);
+            Optional<QueryResults> cachedResult = getCachedResult(token.getAsLong(), uriInfo);
             if (cachedResult.isPresent()) {
                 return cachedResult.get();
             }
@@ -505,35 +520,7 @@ class Query
                 updateCount);
 
         cacheLastResults(queryResults);
-        acacheLastResults(data, queryResults);
         return queryResults;
-    }
-
-    private void acacheLastResultsOld(Iterable<List<Object>> data, QueryResults queryResults)
-    {
-        if (data == null) {
-            log.info("data is null");
-        }
-        else {
-            //log.info("data: " + data.toString());
-            acache.cacheLastResults(queryResults);
-        }
-    }
-
-    private void acacheLastResults(Iterable<List<Object>> data, QueryResults queryResults)
-    {
-        /*if (lastResult != null && lastResult.getNextUri() != null) {
-            lastResultPath = lastResult.getNextUri().getPath();
-        }
-        else {
-            lastResultPath = null;
-        }*/
-        if (data == null) {
-            log.info("data is null");
-        }
-        else {
-            acache.cacheLastResults(queryResults);
-        }
     }
 
     private synchronized void cacheLastResults(QueryResults queryResults)
