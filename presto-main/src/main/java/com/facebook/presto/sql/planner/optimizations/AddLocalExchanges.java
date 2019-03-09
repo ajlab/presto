@@ -83,7 +83,8 @@ import static com.facebook.presto.sql.planner.plan.ExchangeNode.Type.GATHER;
 import static com.facebook.presto.sql.planner.plan.ExchangeNode.Type.REPARTITION;
 import static com.facebook.presto.sql.planner.plan.ExchangeNode.gatheringExchange;
 import static com.facebook.presto.sql.planner.plan.ExchangeNode.mergingExchange;
-import static com.facebook.presto.sql.planner.plan.ExchangeNode.partitionedExchange;
+import static com.facebook.presto.sql.planner.plan.ExchangeNode.roundRobinExchange;
+import static com.facebook.presto.sql.planner.plan.ExchangeNode.systemPartitionedExchange;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
@@ -278,19 +279,19 @@ public class AddLocalExchanges
         {
             checkState(node.getStep() == AggregationNode.Step.SINGLE, "step of aggregation is expected to be SINGLE, but it is %s", node.getStep());
 
-            if (node.hasSingleNodeExecutionPreference(metadata.getFunctionRegistry())) {
+            if (node.hasSingleNodeExecutionPreference(metadata.getFunctionManager())) {
                 return planAndEnforceChildren(node, singleStream(), defaultParallelism(session));
             }
 
             List<Symbol> groupingKeys = node.getGroupingKeys();
             if (node.hasDefaultOutput()) {
-                checkState(node.isDecomposable(metadata.getFunctionRegistry()));
+                checkState(node.isDecomposable(metadata.getFunctionManager()));
 
                 // Put fixed local exchange directly below final aggregation to ensure that final and partial aggregations are separated by exchange (in a local runner mode)
                 // This is required so that default outputs from multiple instances of partial aggregations are passed to a single final aggregation.
                 PlanWithProperties child = planAndEnforce(node.getSource(), any(), defaultParallelism(session));
                 PlanWithProperties exchange = deriveProperties(
-                        partitionedExchange(
+                        systemPartitionedExchange(
                                 idAllocator.getNextId(),
                                 LOCAL,
                                 child.getNode(),
@@ -697,18 +698,14 @@ public class AddLocalExchanges
             Optional<List<Symbol>> requiredPartitionColumns = requiredProperties.getPartitioningColumns();
             if (!requiredPartitionColumns.isPresent()) {
                 // unpartitioned parallel streams required
-                ExchangeNode exchangeNode = partitionedExchange(
-                        idAllocator.getNextId(),
-                        LOCAL,
-                        planWithProperties.getNode(),
-                        new PartitioningScheme(Partitioning.create(FIXED_ARBITRARY_DISTRIBUTION, ImmutableList.of()), planWithProperties.getNode().getOutputSymbols()));
-
-                return deriveProperties(exchangeNode, planWithProperties.getProperties());
+                return deriveProperties(
+                        roundRobinExchange(idAllocator.getNextId(), LOCAL, planWithProperties.getNode()),
+                        planWithProperties.getProperties());
             }
 
             if (requiredProperties.isParallelPreferred()) {
                 // partitioned parallel streams required
-                ExchangeNode exchangeNode = partitionedExchange(
+                ExchangeNode exchangeNode = systemPartitionedExchange(
                         idAllocator.getNextId(),
                         LOCAL,
                         planWithProperties.getNode(),

@@ -13,7 +13,7 @@
  */
 package com.facebook.presto.operator.index;
 
-import com.facebook.presto.metadata.FunctionRegistry;
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.spi.RecordCursor;
 import com.facebook.presto.spi.RecordSet;
 import com.facebook.presto.spi.function.OperatorType;
@@ -28,7 +28,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
 
-import static com.facebook.presto.metadata.Signature.internalOperator;
+import static com.facebook.presto.metadata.InternalSignatureUtils.internalOperator;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Throwables.throwIfUnchecked;
 import static java.lang.Boolean.TRUE;
@@ -43,9 +43,9 @@ public class FieldSetFilteringRecordSet
     private final RecordSet delegate;
     private final List<Set<Field>> fieldSets;
 
-    public FieldSetFilteringRecordSet(FunctionRegistry functionRegistry, RecordSet delegate, List<Set<Integer>> fieldSets)
+    public FieldSetFilteringRecordSet(FunctionManager functionManager, RecordSet delegate, List<Set<Integer>> fieldSets)
     {
-        requireNonNull(functionRegistry, "functionRegistry is null");
+        requireNonNull(functionManager, "functionManager is null");
         this.delegate = requireNonNull(delegate, "delegate is null");
 
         ImmutableList.Builder<Set<Field>> fieldSetsBuilder = ImmutableList.builder();
@@ -55,7 +55,7 @@ public class FieldSetFilteringRecordSet
             for (int field : fieldSet) {
                 fieldSetBuilder.add(new Field(
                         field,
-                        functionRegistry.getScalarFunctionImplementation(internalOperator(OperatorType.EQUAL, BooleanType.BOOLEAN, ImmutableList.of(columnTypes.get(field), columnTypes.get(field)))).getMethodHandle()));
+                        functionManager.getScalarFunctionImplementation(internalOperator(OperatorType.EQUAL, BooleanType.BOOLEAN, ImmutableList.of(columnTypes.get(field), columnTypes.get(field)))).getMethodHandle()));
             }
             fieldSetsBuilder.add(fieldSetBuilder.build());
         }

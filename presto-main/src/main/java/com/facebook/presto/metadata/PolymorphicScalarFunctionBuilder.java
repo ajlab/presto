@@ -17,6 +17,7 @@ import com.facebook.presto.metadata.PolymorphicScalarFunction.PolymorphicScalarF
 import com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty;
 import com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ReturnPlaceConvention;
 import com.facebook.presto.spi.function.OperatorType;
+import com.facebook.presto.spi.function.Signature;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.google.common.collect.ImmutableList;
@@ -28,6 +29,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.function.Function;
 
+import static com.facebook.presto.metadata.OperatorSignatureUtils.mangleOperatorName;
 import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
 import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.BLOCK_AND_POSITION;
 import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
@@ -118,7 +120,7 @@ public final class PolymorphicScalarFunctionBuilder
     private static boolean isOperator(Signature signature)
     {
         for (OperatorType operator : OperatorType.values()) {
-            if (signature.getName().equals(FunctionRegistry.mangleOperatorName(operator))) {
+            if (signature.getName().equals(mangleOperatorName(operator))) {
                 return true;
             }
         }
@@ -132,15 +134,15 @@ public final class PolymorphicScalarFunctionBuilder
         private final List<Type> parameterTypes;
         private final Type returnType;
         private final TypeManager typeManager;
-        private final FunctionRegistry functionRegistry;
+        private final FunctionManager functionManager;
 
-        SpecializeContext(BoundVariables boundVariables, List<Type> parameterTypes, Type returnType, TypeManager typeManager, FunctionRegistry functionRegistry)
+        SpecializeContext(BoundVariables boundVariables, List<Type> parameterTypes, Type returnType, TypeManager typeManager, FunctionManager functionManager)
         {
             this.boundVariables = requireNonNull(boundVariables, "boundVariables is null");
             this.parameterTypes = requireNonNull(parameterTypes, "parameterTypes is null");
             this.typeManager = requireNonNull(typeManager, "typeManager is null");
             this.returnType = requireNonNull(returnType, "returnType is null");
-            this.functionRegistry = requireNonNull(functionRegistry, "functionRegistry is null");
+            this.functionManager = requireNonNull(functionManager, "functionManager is null");
         }
 
         public Type getType(String name)
@@ -168,9 +170,9 @@ public final class PolymorphicScalarFunctionBuilder
             return typeManager;
         }
 
-        public FunctionRegistry getFunctionRegistry()
+        public FunctionManager getFunctionManager()
         {
-            return functionRegistry;
+            return functionManager;
         }
     }
 

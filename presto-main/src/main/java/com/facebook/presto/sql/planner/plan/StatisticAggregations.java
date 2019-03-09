@@ -13,14 +13,13 @@
  */
 package com.facebook.presto.sql.planner.plan;
 
-import com.facebook.presto.metadata.FunctionRegistry;
-import com.facebook.presto.metadata.Signature;
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.operator.aggregation.InternalAggregationFunction;
+import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.SymbolAllocator;
 import com.facebook.presto.sql.planner.plan.AggregationNode.Aggregation;
 import com.facebook.presto.sql.tree.FunctionCall;
-import com.facebook.presto.sql.tree.QualifiedName;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.ImmutableList;
@@ -58,22 +57,22 @@ public class StatisticAggregations
         return groupingSymbols;
     }
 
-    public Parts createPartialAggregations(SymbolAllocator symbolAllocator, FunctionRegistry functionRegistry)
+    public Parts createPartialAggregations(SymbolAllocator symbolAllocator, FunctionManager functionManager)
     {
         ImmutableMap.Builder<Symbol, Aggregation> partialAggregation = ImmutableMap.builder();
         ImmutableMap.Builder<Symbol, Aggregation> finalAggregation = ImmutableMap.builder();
         ImmutableMap.Builder<Symbol, Symbol> mappings = ImmutableMap.builder();
         for (Map.Entry<Symbol, Aggregation> entry : aggregations.entrySet()) {
             Aggregation originalAggregation = entry.getValue();
-            Signature signature = originalAggregation.getSignature();
-            InternalAggregationFunction function = functionRegistry.getAggregateFunctionImplementation(signature);
-            Symbol partialSymbol = symbolAllocator.newSymbol(signature.getName(), function.getIntermediateType());
+            FunctionHandle functionHandle = originalAggregation.getFunctionHandle();
+            InternalAggregationFunction function = functionManager.getAggregateFunctionImplementation(functionHandle);
+            Symbol partialSymbol = symbolAllocator.newSymbol(originalAggregation.getCall().getName(), function.getIntermediateType());
             mappings.put(entry.getKey(), partialSymbol);
-            partialAggregation.put(partialSymbol, new Aggregation(originalAggregation.getCall(), signature, originalAggregation.getMask()));
+            partialAggregation.put(partialSymbol, new Aggregation(originalAggregation.getCall(), functionHandle, originalAggregation.getMask()));
             finalAggregation.put(entry.getKey(),
                     new Aggregation(
-                            new FunctionCall(QualifiedName.of(signature.getName()), ImmutableList.of(partialSymbol.toSymbolReference())),
-                            signature,
+                            new FunctionCall(originalAggregation.getCall().getName(), ImmutableList.of(partialSymbol.toSymbolReference())),
+                            functionHandle,
                             Optional.empty()));
         }
         groupingSymbols.forEach(symbol -> mappings.put(symbol, symbol));

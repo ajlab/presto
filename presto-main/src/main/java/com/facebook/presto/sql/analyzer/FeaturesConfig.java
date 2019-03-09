@@ -109,6 +109,7 @@ public class FeaturesConfig
     private boolean iterativeOptimizerEnabled = true;
     private boolean enableStatsCalculator = true;
     private boolean ignoreStatsCalculatorFailures = true;
+    private boolean printStatsForNonJoinQuery;
     private boolean defaultFilterFactorEnabled;
     private boolean pushAggregationThroughJoin = true;
     private double memoryRevokingTarget = 0.5;
@@ -124,6 +125,8 @@ public class FeaturesConfig
     private int filterAndProjectMinOutputPageRowCount = 256;
     private int maxGroupingSets = 2048;
     private boolean legacyUnnestArrayRows;
+
+    private boolean jsonSerdeCodeGenerationEnabled;
 
     public enum JoinReorderingStrategy
     {
@@ -633,6 +636,18 @@ public class FeaturesConfig
         return this;
     }
 
+    public boolean isPrintStatsForNonJoinQuery()
+    {
+        return printStatsForNonJoinQuery;
+    }
+
+    @Config("print-stats-for-non-join-query")
+    public FeaturesConfig setPrintStatsForNonJoinQuery(boolean printStatsForNonJoinQuery)
+    {
+        this.printStatsForNonJoinQuery = printStatsForNonJoinQuery;
+        return this;
+    }
+
     @Config("optimizer.default-filter-factor-enabled")
     public FeaturesConfig setDefaultFilterFactorEnabled(boolean defaultFilterFactorEnabled)
     {
@@ -911,5 +926,18 @@ public class FeaturesConfig
     {
         this.legacyUnnestArrayRows = legacyUnnestArrayRows;
         return this;
+    }
+
+    @Config("experimental.json-serde-codegen-enabled")
+    @ConfigDescription("Enable code generation for JSON serialization and deserialization")
+    public FeaturesConfig setJsonSerdeCodeGenerationEnabled(boolean jsonSerdeCodeGenerationEnabled)
+    {
+        this.jsonSerdeCodeGenerationEnabled = jsonSerdeCodeGenerationEnabled;
+        return this;
+    }
+
+    public boolean isJsonSerdeCodeGenerationEnabled()
+    {
+        return jsonSerdeCodeGenerationEnabled;
     }
 }

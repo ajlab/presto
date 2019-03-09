@@ -23,6 +23,7 @@ import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
 import static com.facebook.presto.SystemSessionProperties.PREFER_PARTIAL_AGGREGATION;
+import static com.facebook.presto.SystemSessionProperties.PRINT_STATS_FOR_NON_JOIN_QUERY;
 import static com.facebook.presto.tests.statistics.MetricComparisonStrategies.absoluteError;
 import static com.facebook.presto.tests.statistics.MetricComparisonStrategies.defaultTolerance;
 import static com.facebook.presto.tests.statistics.MetricComparisonStrategies.noError;
@@ -42,6 +43,7 @@ public class TestTpchDistributedStats
         DistributedQueryRunner runner = TpchQueryRunnerBuilder.builder()
                 // We are not able to calculate stats for PARTIAL aggregations
                 .amendSession(builder -> builder.setSystemProperty(PREFER_PARTIAL_AGGREGATION, "false"))
+                .amendSession(builder -> builder.setSystemProperty(PRINT_STATS_FOR_NON_JOIN_QUERY, "true"))
                 .buildWithoutCatalogs();
         runner.createCatalog(
                 "tpch",
@@ -164,5 +166,12 @@ public class TestTpchDistributedStats
     {
         statisticsAssertion.check("SELECT l_returnflag, l_linestatus FROM lineitem GROUP BY l_returnflag, l_linestatus",
                 checks -> checks.estimate(OUTPUT_ROW_COUNT, absoluteError(2))); // real row count is 4
+    }
+
+    @Test
+    public void testSort()
+    {
+        statisticsAssertion.check("SELECT * FROM nation ORDER BY n_nationkey",
+                checks -> checks.estimate(OUTPUT_ROW_COUNT, noError()));
     }
 }

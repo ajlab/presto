@@ -13,11 +13,12 @@
  */
 package com.facebook.presto.sql;
 
-import com.facebook.presto.metadata.FunctionRegistry;
-import com.facebook.presto.metadata.Signature;
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.operator.scalar.ScalarFunctionImplementation;
 import com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty;
 import com.facebook.presto.spi.ConnectorSession;
+import com.facebook.presto.spi.function.FunctionHandle;
+import com.facebook.presto.spi.function.Signature;
 import com.google.common.base.Defaults;
 
 import java.lang.invoke.MethodHandle;
@@ -33,11 +34,21 @@ import static java.util.Objects.requireNonNull;
 
 public class InterpretedFunctionInvoker
 {
-    private final FunctionRegistry registry;
+    private final FunctionManager functionManager;
 
-    public InterpretedFunctionInvoker(FunctionRegistry registry)
+    public InterpretedFunctionInvoker(FunctionManager functionManager)
     {
-        this.registry = requireNonNull(registry, "registry is null");
+        this.functionManager = requireNonNull(functionManager, "registry is null");
+    }
+
+    public Object invoke(FunctionHandle functionHandle, ConnectorSession session, Object... arguments)
+    {
+        return invoke(functionHandle, session, Arrays.asList(arguments));
+    }
+
+    public Object invoke(FunctionHandle functionHandle, ConnectorSession session, List<Object> arguments)
+    {
+        return invoke(functionManager.getScalarFunctionImplementation(functionHandle), session, arguments);
     }
 
     public Object invoke(Signature function, ConnectorSession session, Object... arguments)
@@ -45,18 +56,22 @@ public class InterpretedFunctionInvoker
         return invoke(function, session, Arrays.asList(arguments));
     }
 
+    public Object invoke(Signature function, ConnectorSession session, List<Object> arguments)
+    {
+        return invoke(functionManager.getScalarFunctionImplementation(function), session, arguments);
+    }
+
     /**
      * Arguments must be the native container type for the corresponding SQL types.
      * <p>
      * Returns a value in the native container type corresponding to the declared SQL return type
      */
-    public Object invoke(Signature function, ConnectorSession session, List<Object> arguments)
+    private Object invoke(ScalarFunctionImplementation function, ConnectorSession session, List<Object> arguments)
     {
-        ScalarFunctionImplementation implementation = registry.getScalarFunctionImplementation(function);
-        MethodHandle method = implementation.getMethodHandle();
+        MethodHandle method = function.getMethodHandle();
 
         // handle function on instance method, to allow use of fields
-        method = bindInstanceFactory(method, implementation);
+        method = bindInstanceFactory(method, function);
 
         if (method.type().parameterCount() > 0 && method.type().parameterType(0) == ConnectorSession.class) {
             method = method.bindTo(session);
@@ -64,9 +79,9 @@ public class InterpretedFunctionInvoker
         List<Object> actualArguments = new ArrayList<>();
         for (int i = 0; i < arguments.size(); i++) {
             Object argument = arguments.get(i);
-            ArgumentProperty argumentProperty = implementation.getArgumentProperty(i);
+            ArgumentProperty argumentProperty = function.getArgumentProperty(i);
             if (argumentProperty.getArgumentType() == VALUE_TYPE) {
-                if (implementation.getArgumentProperty(i).getNullConvention() == USE_NULL_FLAG) {
+                if (function.getArgumentProperty(i).getNullConvention() == USE_NULL_FLAG) {
                     boolean isNull = argument == null;
                     if (isNull) {
                         argument = Defaults.defaultValue(method.type().parameterType(actualArguments.size()));

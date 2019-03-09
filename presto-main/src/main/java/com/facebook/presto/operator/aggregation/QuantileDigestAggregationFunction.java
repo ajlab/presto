@@ -14,7 +14,7 @@
 package com.facebook.presto.operator.aggregation;
 
 import com.facebook.presto.metadata.BoundVariables;
-import com.facebook.presto.metadata.FunctionRegistry;
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.SqlAggregationFunction;
 import com.facebook.presto.operator.aggregation.state.QuantileDigestState;
 import com.facebook.presto.operator.aggregation.state.QuantileDigestStateFactory;
@@ -34,7 +34,6 @@ import java.lang.invoke.MethodHandle;
 import java.util.List;
 import java.util.stream.Collectors;
 
-import static com.facebook.presto.metadata.Signature.comparableTypeParameter;
 import static com.facebook.presto.operator.aggregation.AggregationMetadata.AccumulatorStateDescriptor;
 import static com.facebook.presto.operator.aggregation.AggregationMetadata.ParameterMetadata;
 import static com.facebook.presto.operator.aggregation.AggregationMetadata.ParameterMetadata.ParameterType.INPUT_CHANNEL;
@@ -46,6 +45,7 @@ import static com.facebook.presto.operator.scalar.QuantileDigestFunctions.DEFAUL
 import static com.facebook.presto.operator.scalar.QuantileDigestFunctions.DEFAULT_WEIGHT;
 import static com.facebook.presto.operator.scalar.QuantileDigestFunctions.verifyAccuracy;
 import static com.facebook.presto.operator.scalar.QuantileDigestFunctions.verifyWeight;
+import static com.facebook.presto.spi.function.Signature.comparableTypeParameter;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
@@ -86,7 +86,7 @@ public final class QuantileDigestAggregationFunction
     }
 
     @Override
-    public InternalAggregationFunction specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
+    public InternalAggregationFunction specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionManager functionManager)
     {
         Type valueType = boundVariables.getTypeVariable("V");
         QuantileDigestType outputType = (QuantileDigestType) typeManager.getParameterizedType(

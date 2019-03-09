@@ -36,7 +36,7 @@ import java.math.BigDecimal;
 import java.util.Map;
 
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
-import static com.facebook.presto.metadata.FunctionKind.SCALAR;
+import static com.facebook.presto.spi.function.FunctionKind.SCALAR;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.DecimalType.createDecimalType;
 import static com.facebook.presto.spi.type.Decimals.encodeScaledValue;
@@ -92,7 +92,7 @@ public class TestSqlToRowExpressionTranslator
 
     private RowExpression translateAndOptimize(Expression expression, Map<NodeRef<Expression>, Type> types)
     {
-        return SqlToRowExpressionTranslator.translate(expression, SCALAR, types, metadata.getFunctionRegistry(), metadata.getTypeManager(), TEST_SESSION, true);
+        return SqlToRowExpressionTranslator.translate(expression, SCALAR, types, metadata.getFunctionManager(), metadata.getTypeManager(), TEST_SESSION, true);
     }
 
     private Expression simplifyExpression(Expression expression)
@@ -108,7 +108,7 @@ public class TestSqlToRowExpressionTranslator
     private Map<NodeRef<Expression>, Type> getExpressionTypes(Expression expression)
     {
         ExpressionAnalyzer expressionAnalyzer = ExpressionAnalyzer.createWithoutSubqueries(
-                metadata.getFunctionRegistry(),
+                metadata.getFunctionManager(),
                 metadata.getTypeManager(),
                 TEST_SESSION,
                 TypeProvider.empty(),

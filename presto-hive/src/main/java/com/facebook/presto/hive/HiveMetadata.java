@@ -15,6 +15,7 @@ package com.facebook.presto.hive;
 
 import com.facebook.presto.hive.HdfsEnvironment.HdfsContext;
 import com.facebook.presto.hive.LocationService.WriteInfo;
+import com.facebook.presto.hive.PartitionUpdate.FileWriteInfo;
 import com.facebook.presto.hive.metastore.Column;
 import com.facebook.presto.hive.metastore.Database;
 import com.facebook.presto.hive.metastore.HiveColumnStatistics;
@@ -26,6 +27,7 @@ import com.facebook.presto.hive.metastore.SemiTransactionalHiveMetastore;
 import com.facebook.presto.hive.metastore.SortingColumn;
 import com.facebook.presto.hive.metastore.StorageFormat;
 import com.facebook.presto.hive.metastore.Table;
+import com.facebook.presto.hive.metastore.thrift.ThriftMetastoreUtil;
 import com.facebook.presto.hive.statistics.HiveStatisticsProvider;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
@@ -59,8 +61,10 @@ import com.facebook.presto.spi.predicate.Domain;
 import com.facebook.presto.spi.predicate.NullableValue;
 import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.security.GrantInfo;
+import com.facebook.presto.spi.security.PrestoPrincipal;
 import com.facebook.presto.spi.security.Privilege;
 import com.facebook.presto.spi.security.PrivilegeInfo;
+import com.facebook.presto.spi.security.RoleGrant;
 import com.facebook.presto.spi.statistics.ColumnStatisticMetadata;
 import com.facebook.presto.spi.statistics.ColumnStatisticType;
 import com.facebook.presto.spi.statistics.ComputedStatistics;
@@ -138,6 +142,7 @@ import static com.facebook.presto.hive.HiveSessionProperties.isOptimizedMismatch
 import static com.facebook.presto.hive.HiveSessionProperties.isRespectTableFormat;
 import static com.facebook.presto.hive.HiveSessionProperties.isSortedWritingEnabled;
 import static com.facebook.presto.hive.HiveSessionProperties.isStatisticsEnabled;
+import static com.facebook.presto.hive.HiveSessionProperties.isWritingStagingFilesEnabled;
 import static com.facebook.presto.hive.HiveTableProperties.AVRO_SCHEMA_URL;
 import static com.facebook.presto.hive.HiveTableProperties.BUCKETED_BY_PROPERTY;
 import static com.facebook.presto.hive.HiveTableProperties.BUCKET_COUNT_PROPERTY;
@@ -175,25 +180,29 @@ import static com.facebook.presto.hive.metastore.HivePrivilegeInfo.toHivePrivile
 import static com.facebook.presto.hive.metastore.MetastoreUtil.getHiveSchema;
 import static com.facebook.presto.hive.metastore.MetastoreUtil.getProtectMode;
 import static com.facebook.presto.hive.metastore.MetastoreUtil.verifyOnline;
-import static com.facebook.presto.hive.metastore.PrincipalType.USER;
 import static com.facebook.presto.hive.metastore.StorageFormat.VIEW_STORAGE_FORMAT;
 import static com.facebook.presto.hive.metastore.StorageFormat.fromHiveStorageFormat;
+import static com.facebook.presto.hive.metastore.thrift.ThriftMetastoreUtil.listEnabledPrincipals;
+import static com.facebook.presto.hive.security.SqlStandardAccessControl.ADMIN_ROLE_NAME;
 import static com.facebook.presto.hive.util.ConfigurationUtils.toJobConf;
 import static com.facebook.presto.hive.util.Statistics.ReduceOperator.ADD;
 import static com.facebook.presto.hive.util.Statistics.createComputedStatisticsToPartitionMap;
 import static com.facebook.presto.hive.util.Statistics.createEmptyPartitionStatistics;
 import static com.facebook.presto.hive.util.Statistics.fromComputedStatistics;
 import static com.facebook.presto.hive.util.Statistics.reduce;
+import static com.facebook.presto.spi.StandardErrorCode.ALREADY_EXISTS;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_ANALYZE_PROPERTY;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_SCHEMA_PROPERTY;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_TABLE_PROPERTY;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
 import static com.facebook.presto.spi.StandardErrorCode.SCHEMA_NOT_EMPTY;
 import static com.facebook.presto.spi.predicate.TupleDomain.withColumnDomains;
+import static com.facebook.presto.spi.security.PrincipalType.USER;
 import static com.facebook.presto.spi.statistics.TableStatisticType.ROW_COUNT;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.google.common.base.MoreObjects.firstNonNull;
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
@@ -216,6 +225,7 @@ public class HiveMetadata
     public static final String PRESTO_VERSION_NAME = "presto_version";
     public static final String PRESTO_QUERY_ID_NAME = "presto_query_id";
     public static final String TABLE_COMMENT = "comment";
+    public static final Set<String> RESERVED_ROLES = ImmutableSet.of("all", "default", "none");
 
     private static final String ORC_BLOOM_FILTER_COLUMNS_KEY = "orc.bloom.filter.columns";
     private static final String ORC_BLOOM_FILTER_FPP_KEY = "orc.bloom.filter.fpp";
@@ -238,6 +248,7 @@ public class HiveMetadata
     private final String prestoVersion;
     private final HiveStatisticsProvider hiveStatisticsProvider;
     private final int maxPartitions;
+    private final StagingFileCommitter stagingFileCommitter;
 
     public HiveMetadata(
             SemiTransactionalHiveMetastore metastore,
@@ -254,7 +265,8 @@ public class HiveMetadata
             TypeTranslator typeTranslator,
             String prestoVersion,
             HiveStatisticsProvider hiveStatisticsProvider,
-            int maxPartitions)
+            int maxPartitions,
+            StagingFileCommitter stagingFileCommitter)
     {
         this.allowCorruptWritesForTesting = allowCorruptWritesForTesting;
 
@@ -273,6 +285,7 @@ public class HiveMetadata
         this.hiveStatisticsProvider = requireNonNull(hiveStatisticsProvider, "hiveStatisticsProvider is null");
         checkArgument(maxPartitions >= 1, "maxPartitions must be at least 1");
         this.maxPartitions = maxPartitions;
+        this.stagingFileCommitter = requireNonNull(stagingFileCommitter, "stagingFileCommitter is null");
     }
 
     public SemiTransactionalHiveMetastore getMetastore()
@@ -859,12 +872,13 @@ public class HiveMetadata
 
     private static PrincipalPrivileges buildInitialPrivilegeSet(String tableOwner)
     {
+        PrestoPrincipal owner = new PrestoPrincipal(USER, tableOwner);
         return new PrincipalPrivileges(
                 ImmutableMultimap.<String, HivePrivilegeInfo>builder()
-                        .put(tableOwner, new HivePrivilegeInfo(HivePrivilege.SELECT, true))
-                        .put(tableOwner, new HivePrivilegeInfo(HivePrivilege.INSERT, true))
-                        .put(tableOwner, new HivePrivilegeInfo(HivePrivilege.UPDATE, true))
-                        .put(tableOwner, new HivePrivilegeInfo(HivePrivilege.DELETE, true))
+                        .put(tableOwner, new HivePrivilegeInfo(HivePrivilege.SELECT, true, owner, owner))
+                        .put(tableOwner, new HivePrivilegeInfo(HivePrivilege.INSERT, true, owner, owner))
+                        .put(tableOwner, new HivePrivilegeInfo(HivePrivilege.UPDATE, true, owner, owner))
+                        .put(tableOwner, new HivePrivilegeInfo(HivePrivilege.DELETE, true, owner, owner))
                         .build(),
                 ImmutableMultimap.of());
     }
@@ -1067,10 +1081,14 @@ public class HiveMetadata
     {
         HiveOutputTableHandle handle = (HiveOutputTableHandle) tableHandle;
 
-        List<PartitionUpdate> partitionUpdates = fragments.stream()
-                .map(Slice::getBytes)
-                .map(partitionUpdateCodec::fromJson)
-                .collect(toList());
+        List<PartitionUpdate> partitionUpdates = getPartitionUpdates(fragments);
+
+        if (isWritingStagingFilesEnabled(session)) {
+            stagingFileCommitter.commitFiles(session, handle.getSchemaName(), handle.getTableName(), partitionUpdates);
+        }
+        else {
+            verifyNoStagingFilesWritten(partitionUpdates);
+        }
 
         WriteInfo writeInfo = locationService.getQueryWriteInfo(handle.getLocationHandle());
         Table table = buildTableObject(
@@ -1096,7 +1114,7 @@ public class HiveMetadata
             partitionUpdates = PartitionUpdate.mergePartitionUpdates(Iterables.concat(partitionUpdates, partitionUpdatesForMissingBuckets));
             for (PartitionUpdate partitionUpdate : partitionUpdatesForMissingBuckets) {
                 Optional<Partition> partition = table.getPartitionColumns().isEmpty() ? Optional.empty() : Optional.of(buildPartitionObject(session, table, partitionUpdate));
-                createEmptyFile(session, partitionUpdate.getWritePath(), table, partition, partitionUpdate.getFileNames());
+                createEmptyFile(session, partitionUpdate.getWritePath(), table, partition, getTargetFileNames(partitionUpdate.getFileWriteInfos()));
             }
         }
 
@@ -1169,7 +1187,9 @@ public class HiveMetadata
                     partitionUpdate.getUpdateMode(),
                     partitionUpdate.getWritePath(),
                     partitionUpdate.getTargetPath(),
-                    fileNamesForMissingBuckets,
+                    fileNamesForMissingBuckets.stream()
+                            .map(fileName -> new FileWriteInfo(fileName, fileName))
+                            .collect(toImmutableList()),
                     0,
                     0,
                     0));
@@ -1186,23 +1206,23 @@ public class HiveMetadata
             int bucketCount,
             PartitionUpdate partitionUpdate)
     {
-        if (partitionUpdate.getFileNames().size() == bucketCount) {
+        if (partitionUpdate.getFileWriteInfos().size() == bucketCount) {
             // fast path for common case
             return ImmutableList.of();
         }
         HdfsContext hdfsContext = new HdfsContext(session, table.getDatabaseName(), table.getTableName());
         JobConf conf = toJobConf(hdfsEnvironment.getConfiguration(hdfsContext, targetPath));
         String fileExtension = HiveWriterFactory.getFileExtension(conf, fromHiveStorageFormat(storageFormat));
-        Set<String> fileNames = ImmutableSet.copyOf(partitionUpdate.getFileNames());
+        Set<String> targetFileNames = ImmutableSet.copyOf(getTargetFileNames(partitionUpdate.getFileWriteInfos()));
         ImmutableList.Builder<String> missingFileNamesBuilder = ImmutableList.builder();
         for (int i = 0; i < bucketCount; i++) {
-            String fileName = HiveWriterFactory.computeBucketedFileName(filePrefix, i) + fileExtension;
-            if (!fileNames.contains(fileName)) {
-                missingFileNamesBuilder.add(fileName);
+            String targetFileName = HiveWriterFactory.computeBucketedFileName(filePrefix, i) + fileExtension;
+            if (!targetFileNames.contains(targetFileName)) {
+                missingFileNamesBuilder.add(targetFileName);
             }
         }
         List<String> missingFileNames = missingFileNamesBuilder.build();
-        verify(fileNames.size() + missingFileNames.size() == bucketCount);
+        verify(targetFileNames.size() + missingFileNames.size() == bucketCount);
         return missingFileNames;
     }
 
@@ -1289,10 +1309,14 @@ public class HiveMetadata
     {
         HiveInsertTableHandle handle = (HiveInsertTableHandle) insertHandle;
 
-        List<PartitionUpdate> partitionUpdates = fragments.stream()
-                .map(Slice::getBytes)
-                .map(partitionUpdateCodec::fromJson)
-                .collect(toList());
+        List<PartitionUpdate> partitionUpdates = getPartitionUpdates(fragments);
+
+        if (isWritingStagingFilesEnabled(session)) {
+            stagingFileCommitter.commitFiles(session, handle.getSchemaName(), handle.getTableName(), partitionUpdates);
+        }
+        else {
+            verifyNoStagingFilesWritten(partitionUpdates);
+        }
 
         HiveStorageFormat tableStorageFormat = handle.getTableStorageFormat();
         partitionUpdates = PartitionUpdate.mergePartitionUpdates(partitionUpdates);
@@ -1311,7 +1335,7 @@ public class HiveMetadata
             partitionUpdates = PartitionUpdate.mergePartitionUpdates(Iterables.concat(partitionUpdates, partitionUpdatesForMissingBuckets));
             for (PartitionUpdate partitionUpdate : partitionUpdatesForMissingBuckets) {
                 Optional<Partition> partition = table.get().getPartitionColumns().isEmpty() ? Optional.empty() : Optional.of(buildPartitionObject(session, table.get(), partitionUpdate));
-                createEmptyFile(session, partitionUpdate.getWritePath(), table.get(), partition, partitionUpdate.getFileNames());
+                createEmptyFile(session, partitionUpdate.getWritePath(), table.get(), partition, getTargetFileNames(partitionUpdate.getFileWriteInfos()));
             }
         }
 
@@ -1335,7 +1359,7 @@ public class HiveMetadata
                         handle.getSchemaName(),
                         handle.getTableName(),
                         partitionUpdate.getWritePath(),
-                        partitionUpdate.getFileNames(),
+                        getTargetFileNames(partitionUpdate.getFileWriteInfos()),
                         partitionStatistics);
             }
             else if (partitionUpdate.getUpdateMode() == APPEND) {
@@ -1352,7 +1376,7 @@ public class HiveMetadata
                         handle.getTableName(),
                         partitionValues,
                         partitionUpdate.getWritePath(),
-                        partitionUpdate.getFileNames(),
+                        getTargetFileNames(partitionUpdate.getFileWriteInfos()),
                         partitionStatistics);
             }
             else if (partitionUpdate.getUpdateMode() == NEW || partitionUpdate.getUpdateMode() == OVERWRITE) {
@@ -1380,6 +1404,21 @@ public class HiveMetadata
                 partitionUpdates.stream()
                         .map(PartitionUpdate::getName)
                         .collect(Collectors.toList())));
+    }
+
+    private void verifyNoStagingFilesWritten(List<PartitionUpdate> partitionUpdates)
+    {
+        checkState(partitionUpdates.stream()
+                .map(PartitionUpdate::getFileWriteInfos)
+                .flatMap(List::stream)
+                .allMatch(stagingFileInfo -> stagingFileInfo.getWriteFileName().equals(stagingFileInfo.getTargetFileName())));
+    }
+
+    private List<String> getTargetFileNames(List<FileWriteInfo> fileWriteInfos)
+    {
+        return fileWriteInfos.stream()
+                .map(FileWriteInfo::getTargetFileName)
+                .collect(toImmutableList());
     }
 
     private Partition buildPartitionObject(ConnectorSession session, Table table, PartitionUpdate partitionUpdate)
@@ -1751,6 +1790,17 @@ public class HiveMetadata
                 hiveLayoutHandle.getBucketFilter());
     }
 
+    @Override
+    public ConnectorPartitioningHandle getPartitioningHandleForExchange(ConnectorSession session, int partitionCount, List<Type> partitionTypes)
+    {
+        return new HivePartitioningHandle(
+                partitionCount,
+                partitionTypes.stream()
+                        .map(type -> toHiveType(typeTranslator, type))
+                        .collect(toImmutableList()),
+                OptionalInt.empty());
+    }
+
     @VisibleForTesting
     static TupleDomain<ColumnHandle> createPredicate(List<ColumnHandle> partitionColumns, List<HivePartition> partitions)
     {
@@ -1901,27 +1951,81 @@ public class HiveMetadata
                 .collect(toImmutableList());
     }
 
+    public void createRole(ConnectorSession session, String role, Optional<PrestoPrincipal> grantor)
+    {
+        // roles are case insensitive in Hive
+        if (RESERVED_ROLES.contains(role)) {
+            throw new PrestoException(ALREADY_EXISTS, "Role name cannot be one of the reserved roles: " + RESERVED_ROLES);
+        }
+        metastore.createRole(role, null);
+    }
+
     @Override
-    public void grantTablePrivileges(ConnectorSession session, SchemaTableName schemaTableName, Set<Privilege> privileges, String grantee, boolean grantOption)
+    public void dropRole(ConnectorSession session, String role)
+    {
+        // roles are case insensitive in Hive
+        metastore.dropRole(role);
+    }
+
+    @Override
+    public Set<String> listRoles(ConnectorSession session)
+    {
+        return ImmutableSet.copyOf(metastore.listRoles());
+    }
+
+    @Override
+    public Set<RoleGrant> listRoleGrants(ConnectorSession session, PrestoPrincipal principal)
+    {
+        return ImmutableSet.copyOf(metastore.listRoleGrants(principal));
+    }
+
+    @Override
+    public void grantRoles(ConnectorSession session, Set<String> roles, Set<PrestoPrincipal> grantees, boolean withAdminOption, Optional<PrestoPrincipal> grantor)
+    {
+        metastore.grantRoles(roles, grantees, withAdminOption, grantor.orElse(new PrestoPrincipal(USER, session.getUser())));
+    }
+
+    @Override
+    public void revokeRoles(ConnectorSession session, Set<String> roles, Set<PrestoPrincipal> grantees, boolean adminOptionFor, Optional<PrestoPrincipal> grantor)
+    {
+        metastore.revokeRoles(roles, grantees, adminOptionFor, grantor.orElse(new PrestoPrincipal(USER, session.getUser())));
+    }
+
+    @Override
+    public Set<RoleGrant> listApplicableRoles(ConnectorSession session, PrestoPrincipal principal)
+    {
+        return ThriftMetastoreUtil.listApplicableRoles(principal, metastore::listRoleGrants)
+                .collect(toImmutableSet());
+    }
+
+    @Override
+    public Set<String> listEnabledRoles(ConnectorSession session)
+    {
+        return ThriftMetastoreUtil.listEnabledRoles(session.getIdentity(), metastore::listRoleGrants)
+                .collect(toImmutableSet());
+    }
+
+    @Override
+    public void grantTablePrivileges(ConnectorSession session, SchemaTableName schemaTableName, Set<Privilege> privileges, PrestoPrincipal grantee, boolean grantOption)
     {
         String schemaName = schemaTableName.getSchemaName();
         String tableName = schemaTableName.getTableName();
 
         Set<HivePrivilegeInfo> hivePrivilegeInfos = privileges.stream()
-                .map(privilege -> new HivePrivilegeInfo(toHivePrivilege(privilege), grantOption))
+                .map(privilege -> new HivePrivilegeInfo(toHivePrivilege(privilege), grantOption, new PrestoPrincipal(USER, session.getUser()), new PrestoPrincipal(USER, session.getUser())))
                 .collect(toSet());
 
         metastore.grantTablePrivileges(schemaName, tableName, grantee, hivePrivilegeInfos);
     }
 
     @Override
-    public void revokeTablePrivileges(ConnectorSession session, SchemaTableName schemaTableName, Set<Privilege> privileges, String grantee, boolean grantOption)
+    public void revokeTablePrivileges(ConnectorSession session, SchemaTableName schemaTableName, Set<Privilege> privileges, PrestoPrincipal grantee, boolean grantOption)
     {
         String schemaName = schemaTableName.getSchemaName();
         String tableName = schemaTableName.getTableName();
 
         Set<HivePrivilegeInfo> hivePrivilegeInfos = privileges.stream()
-                .map(privilege -> new HivePrivilegeInfo(toHivePrivilege(privilege), grantOption))
+                .map(privilege -> new HivePrivilegeInfo(toHivePrivilege(privilege), grantOption, new PrestoPrincipal(USER, session.getUser()), new PrestoPrincipal(USER, session.getUser())))
                 .collect(toSet());
 
         metastore.revokeTablePrivileges(schemaName, tableName, grantee, hivePrivilegeInfos);
@@ -1930,22 +2034,53 @@ public class HiveMetadata
     @Override
     public List<GrantInfo> listTablePrivileges(ConnectorSession session, SchemaTablePrefix schemaTablePrefix)
     {
-        ImmutableList.Builder<GrantInfo> grantInfos = ImmutableList.builder();
+        Set<PrestoPrincipal> principals = listEnabledPrincipals(metastore, session.getIdentity())
+                .collect(toImmutableSet());
+        boolean isAdminRoleSet = hasAdminRole(principals);
+        ImmutableList.Builder<GrantInfo> result = ImmutableList.builder();
         for (SchemaTableName tableName : listTables(session, schemaTablePrefix)) {
-            Set<PrivilegeInfo> privileges = metastore.getTablePrivileges(session.getUser(), tableName.getSchemaName(), tableName.getTableName()).stream()
-                    .map(HivePrivilegeInfo::toPrivilegeInfo)
-                    .flatMap(Set::stream)
-                    .collect(toImmutableSet());
-
-            grantInfos.add(
-                    new GrantInfo(
-                            privileges,
-                            session.getIdentity(),
-                            tableName,
-                            Optional.empty(), // Can't access grantor
-                            Optional.empty())); // Can't access withHierarchy
+            if (isAdminRoleSet) {
+                result.addAll(buildGrants(tableName, null));
+            }
+            else {
+                for (PrestoPrincipal grantee : principals) {
+                    result.addAll(buildGrants(tableName, grantee));
+                }
+            }
         }
-        return grantInfos.build();
+        return result.build();
+    }
+
+    private List<GrantInfo> buildGrants(SchemaTableName tableName, PrestoPrincipal principal)
+    {
+        ImmutableList.Builder<GrantInfo> result = ImmutableList.builder();
+        Set<HivePrivilegeInfo> hivePrivileges = metastore.listTablePrivileges(tableName.getSchemaName(), tableName.getTableName(), principal);
+        for (HivePrivilegeInfo hivePrivilege : hivePrivileges) {
+            Set<PrivilegeInfo> prestoPrivileges = hivePrivilege.toPrivilegeInfo();
+            for (PrivilegeInfo prestoPrivilege : prestoPrivileges) {
+                GrantInfo grant = new GrantInfo(
+                        prestoPrivilege,
+                        hivePrivilege.getGrantee(),
+                        tableName,
+                        Optional.of(hivePrivilege.getGrantor()),
+                        Optional.empty());
+                result.add(grant);
+            }
+        }
+        return result.build();
+    }
+
+    private static boolean hasAdminRole(Set<PrestoPrincipal> roles)
+    {
+        return roles.stream().anyMatch(principal -> principal.getName().equalsIgnoreCase(ADMIN_ROLE_NAME));
+    }
+
+    private List<PartitionUpdate> getPartitionUpdates(Collection<Slice> fragments)
+    {
+        return fragments.stream()
+                .map(Slice::getBytes)
+                .map(partitionUpdateCodec::fromJson)
+                .collect(toList());
     }
 
     private void verifyJvmTimeZone()

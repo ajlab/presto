@@ -15,9 +15,9 @@ package com.facebook.presto.sql.relational;
 
 import com.facebook.presto.Session;
 import com.facebook.presto.SystemSessionProperties;
-import com.facebook.presto.metadata.FunctionKind;
-import com.facebook.presto.metadata.FunctionRegistry;
-import com.facebook.presto.metadata.Signature;
+import com.facebook.presto.metadata.FunctionManager;
+import com.facebook.presto.spi.function.FunctionKind;
+import com.facebook.presto.spi.function.Signature;
 import com.facebook.presto.spi.type.CharType;
 import com.facebook.presto.spi.type.DecimalParseResult;
 import com.facebook.presto.spi.type.Decimals;
@@ -84,7 +84,7 @@ import java.util.Map;
 import java.util.OptionalInt;
 
 import static com.facebook.presto.SystemSessionProperties.isLegacyRowFieldOrdinalAccessEnabled;
-import static com.facebook.presto.metadata.FunctionKind.SCALAR;
+import static com.facebook.presto.spi.function.FunctionKind.SCALAR;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.CharType.createCharType;
@@ -141,7 +141,7 @@ public final class SqlToRowExpressionTranslator
             Expression expression,
             FunctionKind functionKind,
             Map<NodeRef<Expression>, Type> types,
-            FunctionRegistry functionRegistry,
+            FunctionManager functionManager,
             TypeManager typeManager,
             Session session,
             boolean optimize)
@@ -158,7 +158,7 @@ public final class SqlToRowExpressionTranslator
         requireNonNull(result, "translated expression is null");
 
         if (optimize) {
-            ExpressionOptimizer optimizer = new ExpressionOptimizer(functionRegistry, typeManager, session);
+            ExpressionOptimizer optimizer = new ExpressionOptimizer(functionManager, typeManager, session);
             return optimizer.optimize(result);
         }
 

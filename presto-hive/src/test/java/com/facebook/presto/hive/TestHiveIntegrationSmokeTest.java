@@ -29,6 +29,7 @@ import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.Constraint;
 import com.facebook.presto.spi.security.Identity;
+import com.facebook.presto.spi.security.SelectedRole;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeSignature;
 import com.facebook.presto.sql.planner.Plan;
@@ -44,6 +45,7 @@ import com.facebook.presto.testing.MaterializedRow;
 import com.facebook.presto.tests.AbstractTestIntegrationSmokeTest;
 import com.facebook.presto.tests.DistributedQueryRunner;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.io.Files;
 import org.apache.hadoop.fs.Path;
@@ -75,6 +77,7 @@ import static com.facebook.presto.hive.HiveQueryRunner.TPCH_SCHEMA;
 import static com.facebook.presto.hive.HiveQueryRunner.createBucketedSession;
 import static com.facebook.presto.hive.HiveQueryRunner.createQueryRunner;
 import static com.facebook.presto.hive.HiveSessionProperties.RCFILE_OPTIMIZED_WRITER_ENABLED;
+import static com.facebook.presto.hive.HiveSessionProperties.WRITING_STAGING_FILES_ENABLED;
 import static com.facebook.presto.hive.HiveSessionProperties.getInsertExistingPartitionsBehavior;
 import static com.facebook.presto.hive.HiveTableProperties.BUCKETED_BY_PROPERTY;
 import static com.facebook.presto.hive.HiveTableProperties.BUCKET_COUNT_PROPERTY;
@@ -83,6 +86,7 @@ import static com.facebook.presto.hive.HiveTableProperties.STORAGE_FORMAT_PROPER
 import static com.facebook.presto.hive.HiveTestUtils.TYPE_MANAGER;
 import static com.facebook.presto.hive.HiveUtil.columnExtraInfo;
 import static com.facebook.presto.spi.predicate.Marker.Bound.EXACTLY;
+import static com.facebook.presto.spi.security.SelectedRole.Type.ROLE;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.CharType.createCharType;
@@ -135,7 +139,7 @@ public class TestHiveIntegrationSmokeTest
     @SuppressWarnings("unused")
     public TestHiveIntegrationSmokeTest()
     {
-        this(() -> createQueryRunner(ORDERS, CUSTOMER), createBucketedSession(), HIVE_CATALOG, new HiveTypeTranslator());
+        this(() -> createQueryRunner(ORDERS, CUSTOMER), createBucketedSession(Optional.of(new SelectedRole(ROLE, Optional.of("admin")))), HIVE_CATALOG, new HiveTypeTranslator());
     }
 
     protected TestHiveIntegrationSmokeTest(QueryRunnerSupplier queryRunnerSupplier, Session bucketedSession, String catalog, TypeTranslator typeTranslator)
@@ -154,15 +158,19 @@ public class TestHiveIntegrationSmokeTest
     @Test
     public void testSchemaOperations()
     {
-        assertUpdate("CREATE SCHEMA new_schema");
+        Session admin = Session.builder(getQueryRunner().getDefaultSession())
+                .setIdentity(new Identity("hive", Optional.empty(), ImmutableMap.of("hive", new SelectedRole(SelectedRole.Type.ROLE, Optional.of("admin")))))
+                .build();
 
-        assertUpdate("CREATE TABLE new_schema.test (x bigint)");
+        assertUpdate(admin, "CREATE SCHEMA new_schema");
 
-        assertQueryFails("DROP SCHEMA new_schema", "Schema not empty: new_schema");
+        assertUpdate(admin, "CREATE TABLE new_schema.test (x bigint)");
 
-        assertUpdate("DROP TABLE new_schema.test");
+        assertQueryFails(admin, "DROP SCHEMA new_schema", "Schema not empty: new_schema");
 
-        assertUpdate("DROP SCHEMA new_schema");
+        assertUpdate(admin, "DROP TABLE new_schema.test");
+
+        assertUpdate(admin, "DROP SCHEMA new_schema");
     }
 
     @Test
@@ -2393,6 +2401,11 @@ public class TestHiveIntegrationSmokeTest
                             "SELECT orderkey key3, comment value3 FROM orders",
                     15000);
             assertUpdate(
+                    "CREATE TABLE test_grouped_join4\n" +
+                            "WITH (bucket_count = 13, bucketed_by = ARRAY['key4_bucket']) AS\n" +
+                            "SELECT orderkey key4_bucket, orderkey key4_non_bucket, comment value4 FROM orders",
+                    15000);
+            assertUpdate(
                     "CREATE TABLE test_grouped_joinN AS\n" +
                             "SELECT orderkey keyN, comment valueN FROM orders",
                     15000);
@@ -2446,6 +2459,15 @@ public class TestHiveIntegrationSmokeTest
                     .setSystemProperty(COLOCATED_JOIN, "true")
                     .setSystemProperty(GROUPED_EXECUTION_FOR_AGGREGATION, "true")
                     .setSystemProperty(CONCURRENT_LIFESPANS_PER_NODE, "1")
+                    .build();
+
+            // Broadcast JOIN, 1 group per worker at a time, dynamic schedule
+            Session broadcastOneGroupAtATimeDynamic = Session.builder(getSession())
+                    .setSystemProperty(JOIN_DISTRIBUTION_TYPE, BROADCAST.name())
+                    .setSystemProperty(COLOCATED_JOIN, "true")
+                    .setSystemProperty(GROUPED_EXECUTION_FOR_AGGREGATION, "true")
+                    .setSystemProperty(CONCURRENT_LIFESPANS_PER_NODE, "1")
+                    .setSystemProperty(DYNAMIC_SCHEDULE_FOR_GROUPED_EXECUTION, "true")
                     .build();
 
             //
@@ -2682,6 +2704,16 @@ public class TestHiveIntegrationSmokeTest
                             "GROUP BY keyD";
             @Language("SQL") String expectedGroupOnJoinResult = "SELECT orderkey, 2, 2 from orders";
 
+            @Language("SQL") String groupOnUngroupedJoinResult =
+                    "SELECT key4_bucket, count(value4), count(valueN)\n" +
+                            "FROM\n" +
+                            "  test_grouped_join4\n" +
+                            "JOIN\n" +
+                            "  test_grouped_joinN\n" +
+                            "ON key4_non_bucket=keyN\n" +
+                            "GROUP BY key4_bucket";
+            @Language("SQL") String expectedGroupOnUngroupedJoinResult = "SELECT orderkey, count(*), count(*) from orders group by orderkey";
+
             // Eligible GROUP BYs run in the same fragment regardless of colocated_join flag
             assertQuery(colocatedAllGroupsAtOnce, joinGroupedWithGrouped, expectedJoinGroupedWithGrouped, assertRemoteExchangesCount(1));
             assertQuery(colocatedOneGroupAtATime, joinGroupedWithGrouped, expectedJoinGroupedWithGrouped, assertRemoteExchangesCount(1));
@@ -2693,10 +2725,12 @@ public class TestHiveIntegrationSmokeTest
             assertQuery(colocatedOneGroupAtATime, groupOnJoinResult, expectedGroupOnJoinResult, assertRemoteExchangesCount(2));
             assertQuery(colocatedOneGroupAtATimeDynamic, groupOnJoinResult, expectedGroupOnJoinResult, assertRemoteExchangesCount(2));
 
-            assertQuery(broadcastOneGroupAtATime, groupOnJoinResult, expectedGroupOnJoinResult, assertRemoteExchangesCount(2));
+            assertQuery(broadcastOneGroupAtATime, groupOnUngroupedJoinResult, expectedGroupOnUngroupedJoinResult, assertRemoteExchangesCount(2));
+            assertQuery(broadcastOneGroupAtATimeDynamic, groupOnUngroupedJoinResult, expectedGroupOnUngroupedJoinResult, assertRemoteExchangesCount(2));
 
             // cannot be executed in a grouped manner but should still produce correct result
             assertQuery(colocatedOneGroupAtATime, joinUngroupedWithGrouped, expectedJoinUngroupedWithGrouped, assertRemoteExchangesCount(2));
+            assertQuery(colocatedOneGroupAtATime, groupOnUngroupedJoinResult, expectedGroupOnUngroupedJoinResult, assertRemoteExchangesCount(4));
 
             //
             // Outer JOIN (that involves LookupOuterOperator)
@@ -2849,6 +2883,7 @@ public class TestHiveIntegrationSmokeTest
             assertUpdate("DROP TABLE IF EXISTS test_grouped_join1");
             assertUpdate("DROP TABLE IF EXISTS test_grouped_join2");
             assertUpdate("DROP TABLE IF EXISTS test_grouped_join3");
+            assertUpdate("DROP TABLE IF EXISTS test_grouped_join4");
             assertUpdate("DROP TABLE IF EXISTS test_grouped_joinN");
             assertUpdate("DROP TABLE IF EXISTS test_grouped_joinDual");
             assertUpdate("DROP TABLE IF EXISTS test_grouped_window");
@@ -2866,7 +2901,7 @@ public class TestHiveIntegrationSmokeTest
             if (actualRemoteExchangesCount != expectedRemoteExchangesCount) {
                 Session session = getSession();
                 Metadata metadata = ((DistributedQueryRunner) getQueryRunner()).getCoordinator().getMetadata();
-                String formattedPlan = textLogicalPlan(plan.getRoot(), plan.getTypes(), metadata.getFunctionRegistry(), StatsAndCosts.empty(), session, 0);
+                String formattedPlan = textLogicalPlan(plan.getRoot(), plan.getTypes(), metadata.getFunctionManager(), StatsAndCosts.empty(), session, 0);
                 throw new AssertionError(format(
                         "Expected [\n%s\n] remote exchanges but found [\n%s\n] remote exchanges. Actual plan is [\n\n%s\n]",
                         expectedRemoteExchangesCount,
@@ -2874,6 +2909,71 @@ public class TestHiveIntegrationSmokeTest
                         formattedPlan));
             }
         };
+    }
+
+    @Test
+    public void testInsertAndCreateTableWithWritingStagingFileEnabled()
+    {
+        try {
+            Session session = Session.builder(getSession())
+                    .setCatalogSessionProperty(catalog, WRITING_STAGING_FILES_ENABLED, "true")
+                    .build();
+
+            // Test CREATE TABLE AS
+            assertUpdate(
+                    session,
+                    "CREATE TABLE test_write_staging_files_for_create_unbucketed_table_as\n" +
+                            "WITH (partitioned_by = ARRAY['partition_key']) AS\n" +
+                            "SELECT comment value, orderstatus partition_key FROM orders",
+                    15000);
+            assertQuery("SELECT value, partition_key FROM test_write_staging_files_for_create_unbucketed_table_as",
+                    "SELECT comment value, orderstatus partition_key FROM orders");
+
+            assertUpdate(
+                    session,
+                    "CREATE TABLE test_write_staging_files_for_create_bucketed_table_as\n" +
+                            "WITH (partitioned_by = ARRAY['partition_key'], bucket_count = 13, bucketed_by = ARRAY['bucket_key']) AS\n" +
+                            "SELECT custkey bucket_key, comment value, orderstatus partition_key FROM orders",
+                    15000);
+            assertQuery("SELECT bucket_key, value, partition_key FROM test_write_staging_files_for_create_bucketed_table_as",
+                    "SELECT custkey bucket_key, comment value, orderstatus partition_key FROM orders");
+
+            // Test INSERT
+            assertUpdate(
+                    session,
+                    "CREATE TABLE test_write_staging_files_for_insert_unbucketed_table (" +
+                            "  value VARCHAR,\n" +
+                            "  partition_key VARCHAR)\n" +
+                            "WITH (partitioned_by = ARRAY['partition_key'])");
+            assertUpdate(
+                    session,
+                    "INSERT INTO test_write_staging_files_for_insert_unbucketed_table\n" +
+                            "SELECT comment value, orderstatus partition_key FROM orders",
+                    15000);
+            assertQuery("SELECT value, partition_key FROM test_write_staging_files_for_insert_unbucketed_table",
+                    "SELECT comment value, orderstatus partition_key FROM orders");
+
+            assertUpdate(
+                    session,
+                    "CREATE TABLE test_write_staging_files_for_insert_bucketed_table (" +
+                            "  bucket_key BIGINT,\n" +
+                            "  value VARCHAR,\n" +
+                            "  partition_key VARCHAR)\n" +
+                            "WITH (partitioned_by = ARRAY['partition_key'], bucket_count = 13, bucketed_by = ARRAY['bucket_key'])");
+            assertUpdate(
+                    session,
+                    "INSERT INTO test_write_staging_files_for_insert_bucketed_table\n" +
+                            "SELECT orderkey bucket_key, comment value, orderstatus partition_key FROM orders",
+                    15000);
+            assertQuery("SELECT bucket_key, value, partition_key FROM test_write_staging_files_for_insert_bucketed_table",
+                    "SELECT orderkey bucket_key, comment value, orderstatus partition_key FROM orders");
+        }
+        finally {
+            assertUpdate("DROP TABLE IF EXISTS test_write_staging_files_for_create_unbucketed_table_as");
+            assertUpdate("DROP TABLE IF EXISTS test_write_staging_files_for_create_bucketed_table_as");
+            assertUpdate("DROP TABLE IF EXISTS test_write_staging_files_for_insert_unbucketed_table");
+            assertUpdate("DROP TABLE IF EXISTS test_write_staging_files_for_insert_bucketed_table");
+        }
     }
 
     @Test
@@ -3074,6 +3174,13 @@ public class TestHiveIntegrationSmokeTest
                         "(null, null, null, null, 0E0, null, null)");
 
         assertUpdate(format("DROP TABLE %s", tableName));
+    }
+
+    @Test
+    public void testAnalyzePropertiesSystemTable()
+    {
+        assertQuery("SELECT * FROM system.metadata.analyze_properties WHERE catalog_name = 'hive'",
+                "SELECT 'hive', 'partitions', '', 'array(array(varchar))', 'Partitions to be analyzed'");
     }
 
     @Test

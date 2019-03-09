@@ -14,10 +14,11 @@
 package com.facebook.presto.sql.relational.optimizer;
 
 import com.facebook.presto.Session;
-import com.facebook.presto.metadata.FunctionRegistry;
-import com.facebook.presto.metadata.Signature;
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.operator.scalar.ScalarFunctionImplementation;
 import com.facebook.presto.spi.ConnectorSession;
+import com.facebook.presto.spi.function.OperatorType;
+import com.facebook.presto.spi.function.Signature;
 import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.spi.type.TypeSignature;
 import com.facebook.presto.sql.relational.CallExpression;
@@ -34,7 +35,7 @@ import java.lang.invoke.MethodHandle;
 import java.util.ArrayList;
 import java.util.List;
 
-import static com.facebook.presto.metadata.Signature.internalScalarFunction;
+import static com.facebook.presto.metadata.InternalSignatureUtils.internalScalarFunction;
 import static com.facebook.presto.operator.scalar.JsonStringToArrayCast.JSON_STRING_TO_ARRAY_NAME;
 import static com.facebook.presto.operator.scalar.JsonStringToMapCast.JSON_STRING_TO_MAP_NAME;
 import static com.facebook.presto.operator.scalar.JsonStringToRowCast.JSON_STRING_TO_ROW_NAME;
@@ -67,13 +68,13 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 
 public class ExpressionOptimizer
 {
-    private final FunctionRegistry registry;
+    private final FunctionManager functionManager;
     private final TypeManager typeManager;
     private final ConnectorSession session;
 
-    public ExpressionOptimizer(FunctionRegistry registry, TypeManager typeManager, Session session)
+    public ExpressionOptimizer(FunctionManager functionManager, TypeManager typeManager, Session session)
     {
-        this.registry = registry;
+        this.functionManager = functionManager;
         this.typeManager = typeManager;
         this.session = session.toConnectorSession();
     }
@@ -164,7 +165,7 @@ public class ExpressionOptimizer
                 }
             }
 
-            ScalarFunctionImplementation function = registry.getScalarFunctionImplementation(signature);
+            ScalarFunctionImplementation function = functionManager.getScalarFunctionImplementation(signature);
             List<RowExpression> arguments = call.getArguments().stream()
                     .map(argument -> argument.accept(this, context))
                     .collect(toImmutableList());
@@ -255,7 +256,7 @@ public class ExpressionOptimizer
             }
 
             return call(
-                    registry.getCoercion(call.getArguments().get(0).getType(), call.getType()),
+                    functionManager.lookupCast(OperatorType.CAST, call.getArguments().get(0).getType().getTypeSignature(), call.getType().getTypeSignature()).getSignature(),
                     call.getType(),
                     call.getArguments());
         }

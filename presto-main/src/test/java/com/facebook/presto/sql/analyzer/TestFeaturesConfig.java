@@ -87,6 +87,7 @@ public class TestFeaturesConfig
                 .setIterativeOptimizerTimeout(new Duration(3, MINUTES))
                 .setEnableStatsCalculator(true)
                 .setIgnoreStatsCalculatorFailures(true)
+                .setPrintStatsForNonJoinQuery(false)
                 .setDefaultFilterFactorEnabled(false)
                 .setExchangeCompressionEnabled(false)
                 .setLegacyTimestamp(true)
@@ -107,7 +108,8 @@ public class TestFeaturesConfig
                 .setMultimapAggGroupImplementation(MultimapAggGroupImplementation.NEW)
                 .setDistributedSortEnabled(true)
                 .setMaxGroupingSets(2048)
-                .setLegacyUnnestArrayRows(false));
+                .setLegacyUnnestArrayRows(false)
+                .setJsonSerdeCodeGenerationEnabled(false));
     }
 
     @Test
@@ -121,6 +123,7 @@ public class TestFeaturesConfig
                 .put("experimental.iterative-optimizer-timeout", "10s")
                 .put("experimental.enable-stats-calculator", "false")
                 .put("optimizer.ignore-stats-calculator-failures", "false")
+                .put("print-stats-for-non-join-query", "true")
                 .put("optimizer.default-filter-factor-enabled", "true")
                 .put("deprecated.legacy-array-agg", "true")
                 .put("deprecated.legacy-log-function", "true")
@@ -175,6 +178,7 @@ public class TestFeaturesConfig
                 .put("distributed-sort", "false")
                 .put("analyzer.max-grouping-sets", "2047")
                 .put("deprecated.legacy-unnest-array-rows", "true")
+                .put("experimental.json-serde-codegen-enabled", "true")
                 .build();
 
         FeaturesConfig expected = new FeaturesConfig()
@@ -185,6 +189,7 @@ public class TestFeaturesConfig
                 .setIterativeOptimizerTimeout(new Duration(10, SECONDS))
                 .setEnableStatsCalculator(false)
                 .setIgnoreStatsCalculatorFailures(false)
+                .setPrintStatsForNonJoinQuery(true)
                 .setDistributedIndexJoinsEnabled(true)
                 .setJoinDistributionType(BROADCAST)
                 .setJoinMaxBroadcastTableSize(new DataSize(42, GIGABYTE))
@@ -238,7 +243,8 @@ public class TestFeaturesConfig
                 .setDistributedSortEnabled(false)
                 .setMaxGroupingSets(2047)
                 .setLegacyUnnestArrayRows(true)
-                .setDefaultFilterFactorEnabled(true);
+                .setDefaultFilterFactorEnabled(true)
+                .setJsonSerdeCodeGenerationEnabled(true);
         assertFullMapping(properties, expected);
     }
 

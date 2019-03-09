@@ -15,10 +15,7 @@ package com.facebook.presto.operator;
 
 import com.facebook.presto.block.BlockEncodingManager;
 import com.facebook.presto.metadata.BoundVariables;
-import com.facebook.presto.metadata.FunctionKind;
-import com.facebook.presto.metadata.FunctionRegistry;
-import com.facebook.presto.metadata.LongVariableConstraint;
-import com.facebook.presto.metadata.Signature;
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.operator.aggregation.AggregationImplementation;
 import com.facebook.presto.operator.aggregation.AggregationMetadata;
 import com.facebook.presto.operator.aggregation.InternalAggregationFunction;
@@ -41,10 +38,13 @@ import com.facebook.presto.spi.function.BlockIndex;
 import com.facebook.presto.spi.function.BlockPosition;
 import com.facebook.presto.spi.function.CombineFunction;
 import com.facebook.presto.spi.function.Description;
+import com.facebook.presto.spi.function.FunctionKind;
 import com.facebook.presto.spi.function.InputFunction;
 import com.facebook.presto.spi.function.LiteralParameters;
+import com.facebook.presto.spi.function.LongVariableConstraint;
 import com.facebook.presto.spi.function.OperatorDependency;
 import com.facebook.presto.spi.function.OutputFunction;
+import com.facebook.presto.spi.function.Signature;
 import com.facebook.presto.spi.function.SqlType;
 import com.facebook.presto.spi.function.TypeParameter;
 import com.facebook.presto.spi.function.TypeParameterSpecialization;
@@ -67,10 +67,10 @@ import org.testng.annotations.Test;
 import java.lang.invoke.MethodHandle;
 import java.util.List;
 
-import static com.facebook.presto.metadata.Signature.typeVariable;
 import static com.facebook.presto.operator.aggregation.AggregationFromAnnotationsParser.parseFunctionDefinition;
 import static com.facebook.presto.operator.aggregation.AggregationFromAnnotationsParser.parseFunctionDefinitions;
 import static com.facebook.presto.spi.function.OperatorType.LESS_THAN;
+import static com.facebook.presto.spi.function.Signature.typeVariable;
 import static com.facebook.presto.spi.type.StandardTypes.ARRAY;
 import static com.facebook.presto.spi.type.StandardTypes.DOUBLE;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
@@ -822,8 +822,8 @@ public class TestAnnotationEngineForAggregates
         assertTrue(implementation.getInputParameterMetadataTypes().equals(expectedMetadataTypes));
 
         TypeManager typeRegistry = new TypeRegistry();
-        FunctionRegistry functionRegistry = new FunctionRegistry(typeRegistry, new BlockEncodingManager(typeRegistry), new FeaturesConfig());
-        InternalAggregationFunction specialized = aggregation.specialize(BoundVariables.builder().build(), 1, typeRegistry, functionRegistry);
+        FunctionManager functionManager = new FunctionManager(typeRegistry, new BlockEncodingManager(typeRegistry), new FeaturesConfig());
+        InternalAggregationFunction specialized = aggregation.specialize(BoundVariables.builder().build(), 1, typeRegistry, functionManager);
         assertEquals(specialized.getFinalType(), DoubleType.DOUBLE);
         assertTrue(specialized.isDecomposable());
         assertEquals(specialized.name(), "inject_operator_aggregate");
@@ -906,8 +906,8 @@ public class TestAnnotationEngineForAggregates
         assertTrue(implementation.getInputParameterMetadataTypes().equals(expectedMetadataTypes));
 
         TypeManager typeRegistry = new TypeRegistry();
-        FunctionRegistry functionRegistry = new FunctionRegistry(typeRegistry, new BlockEncodingManager(typeRegistry), new FeaturesConfig());
-        InternalAggregationFunction specialized = aggregation.specialize(BoundVariables.builder().setTypeVariable("T", DoubleType.DOUBLE).build(), 1, typeRegistry, functionRegistry);
+        FunctionManager functionManager = new FunctionManager(typeRegistry, new BlockEncodingManager(typeRegistry), new FeaturesConfig());
+        InternalAggregationFunction specialized = aggregation.specialize(BoundVariables.builder().setTypeVariable("T", DoubleType.DOUBLE).build(), 1, typeRegistry, functionManager);
         assertEquals(specialized.getFinalType(), DoubleType.DOUBLE);
         assertTrue(specialized.isDecomposable());
         assertEquals(specialized.name(), "inject_type_aggregate");
@@ -987,8 +987,8 @@ public class TestAnnotationEngineForAggregates
         assertTrue(implementation.getInputParameterMetadataTypes().equals(expectedMetadataTypes));
 
         TypeManager typeRegistry = new TypeRegistry();
-        FunctionRegistry functionRegistry = new FunctionRegistry(typeRegistry, new BlockEncodingManager(typeRegistry), new FeaturesConfig());
-        InternalAggregationFunction specialized = aggregation.specialize(BoundVariables.builder().setLongVariable("x", 17L).build(), 1, typeRegistry, functionRegistry);
+        FunctionManager functionManager = new FunctionManager(typeRegistry, new BlockEncodingManager(typeRegistry), new FeaturesConfig());
+        InternalAggregationFunction specialized = aggregation.specialize(BoundVariables.builder().setLongVariable("x", 17L).build(), 1, typeRegistry, functionManager);
         assertEquals(specialized.getFinalType(), VarcharType.createVarcharType(17));
         assertTrue(specialized.isDecomposable());
         assertEquals(specialized.name(), "inject_literal_aggregate");
@@ -1059,13 +1059,13 @@ public class TestAnnotationEngineForAggregates
         assertTrue(implementation.getInputParameterMetadataTypes().equals(expectedMetadataTypes));
 
         TypeManager typeRegistry = new TypeRegistry();
-        FunctionRegistry functionRegistry = new FunctionRegistry(typeRegistry, new BlockEncodingManager(typeRegistry), new FeaturesConfig());
+        FunctionManager functionManager = new FunctionManager(typeRegistry, new BlockEncodingManager(typeRegistry), new FeaturesConfig());
         InternalAggregationFunction specialized = aggregation.specialize(
                 BoundVariables.builder()
                         .setLongVariable("x", 17L)
                         .setLongVariable("y", 13L)
                         .setLongVariable("z", 30L)
-                        .build(), 2, typeRegistry, functionRegistry);
+                        .build(), 2, typeRegistry, functionManager);
         assertEquals(specialized.getFinalType(), VarcharType.createVarcharType(30));
         assertTrue(specialized.isDecomposable());
         assertEquals(specialized.name(), "parametric_aggregate_long_constraint");

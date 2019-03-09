@@ -26,6 +26,9 @@ import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.StandardErrorCode;
 import com.facebook.presto.spi.TableNotFoundException;
+import com.facebook.presto.spi.security.PrestoPrincipal;
+import com.facebook.presto.spi.security.PrincipalType;
+import com.facebook.presto.spi.security.RoleGrant;
 import com.facebook.presto.spi.statistics.ColumnStatisticType;
 import com.facebook.presto.spi.type.Type;
 import com.google.common.annotations.VisibleForTesting;
@@ -35,7 +38,8 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
-import io.airlift.concurrent.MoreFutures;
+import com.google.common.util.concurrent.ListenableFuture;
+import com.google.common.util.concurrent.ListeningExecutorService;
 import io.airlift.log.Logger;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
@@ -54,8 +58,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
@@ -71,12 +73,16 @@ import static com.facebook.presto.hive.HiveWriteUtils.createDirectory;
 import static com.facebook.presto.hive.HiveWriteUtils.pathExists;
 import static com.facebook.presto.hive.LocationHandle.WriteMode.DIRECT_TO_TARGET_NEW_DIRECTORY;
 import static com.facebook.presto.hive.metastore.HivePrivilegeInfo.HivePrivilege.OWNERSHIP;
+import static com.facebook.presto.hive.metastore.MetastoreUtil.getFileSystem;
+import static com.facebook.presto.hive.metastore.MetastoreUtil.renameFile;
+import static com.facebook.presto.hive.metastore.MetastoreUtil.waitForListenableFutures;
 import static com.facebook.presto.hive.util.Statistics.ReduceOperator.SUBTRACT;
 import static com.facebook.presto.hive.util.Statistics.merge;
 import static com.facebook.presto.hive.util.Statistics.reduce;
 import static com.facebook.presto.spi.StandardErrorCode.ALREADY_EXISTS;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
 import static com.facebook.presto.spi.StandardErrorCode.TRANSACTION_CONFLICT;
+import static com.facebook.presto.spi.security.PrincipalType.USER;
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
@@ -94,7 +100,7 @@ public class SemiTransactionalHiveMetastore
 
     private final ExtendedHiveMetastore delegate;
     private final HdfsEnvironment hdfsEnvironment;
-    private final Executor renameExecutor;
+    private final ListeningExecutorService renameExecutor;
     private final boolean skipDeletionForAlter;
     private final boolean skipTargetCleanupOnRollback;
 
@@ -110,7 +116,12 @@ public class SemiTransactionalHiveMetastore
     private State state = State.EMPTY;
     private boolean throwOnCleanupFailure;
 
-    public SemiTransactionalHiveMetastore(HdfsEnvironment hdfsEnvironment, ExtendedHiveMetastore delegate, Executor renameExecutor, boolean skipDeletionForAlter, boolean skipTargetCleanupOnRollback)
+    public SemiTransactionalHiveMetastore(
+            HdfsEnvironment hdfsEnvironment,
+            ExtendedHiveMetastore delegate,
+            ListeningExecutorService renameExecutor,
+            boolean skipDeletionForAlter,
+            boolean skipTargetCleanupOnRollback)
     {
         this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
         this.delegate = requireNonNull(delegate, "delegate is null");
@@ -782,40 +793,63 @@ public class SemiTransactionalHiveMetastore
         return makePartName(columnNames, partitionValues);
     }
 
-    public synchronized Set<String> getRoles(String user)
+    public synchronized void createRole(String role, String grantor)
     {
-        checkReadable();
-        return delegate.getRoles(user);
+        setExclusive((delegate, hdfsEnvironment) -> delegate.createRole(role, grantor));
     }
 
-    public synchronized Set<HivePrivilegeInfo> getDatabasePrivileges(String user, String databaseName)
+    public synchronized void dropRole(String role)
     {
-        checkReadable();
-        return delegate.getDatabasePrivileges(user, databaseName);
+        setExclusive((delegate, hdfsEnvironment) -> delegate.dropRole(role));
     }
 
-    public synchronized Set<HivePrivilegeInfo> getTablePrivileges(String user, String databaseName, String tableName)
+    public synchronized Set<String> listRoles()
+    {
+        checkReadable();
+        return delegate.listRoles();
+    }
+
+    public synchronized void grantRoles(Set<String> roles, Set<PrestoPrincipal> grantees, boolean withAdminOption, PrestoPrincipal grantor)
+    {
+        setExclusive((delegate, hdfsEnvironment) -> delegate.grantRoles(roles, grantees, withAdminOption, grantor));
+    }
+
+    public synchronized void revokeRoles(Set<String> roles, Set<PrestoPrincipal> grantees, boolean adminOptionFor, PrestoPrincipal grantor)
+    {
+        setExclusive((delegate, hdfsEnvironment) -> delegate.revokeRoles(roles, grantees, adminOptionFor, grantor));
+    }
+
+    public synchronized Set<RoleGrant> listRoleGrants(PrestoPrincipal principal)
+    {
+        checkReadable();
+        return delegate.listRoleGrants(principal);
+    }
+
+    public synchronized Set<HivePrivilegeInfo> listTablePrivileges(String databaseName, String tableName, PrestoPrincipal principal)
     {
         checkReadable();
         SchemaTableName schemaTableName = new SchemaTableName(databaseName, tableName);
         Action<TableAndMore> tableAction = tableActions.get(schemaTableName);
         if (tableAction == null) {
-            return delegate.getTablePrivileges(user, databaseName, tableName);
+            return delegate.listTablePrivileges(databaseName, tableName, principal);
         }
         switch (tableAction.getType()) {
             case ADD:
             case ALTER: {
-                if (!user.equals(tableAction.getData().getTable().getOwner())) {
-                    throw new PrestoException(NOT_SUPPORTED, "Cannot access a table newly created in the transaction with a different user");
+                if (principal.getType() == PrincipalType.ROLE) {
+                    return ImmutableSet.of();
                 }
-                Collection<HivePrivilegeInfo> privileges = tableAction.getData().getPrincipalPrivileges().getUserPrivileges().get(user);
+                if (!principal.getName().equals(tableAction.getData().getTable().getOwner())) {
+                    return ImmutableSet.of();
+                }
+                Collection<HivePrivilegeInfo> privileges = tableAction.getData().getPrincipalPrivileges().getUserPrivileges().get(principal.getName());
                 return ImmutableSet.<HivePrivilegeInfo>builder()
                         .addAll(privileges)
-                        .add(new HivePrivilegeInfo(OWNERSHIP, true))
+                        .add(new HivePrivilegeInfo(OWNERSHIP, true, new PrestoPrincipal(USER, principal.getName()), new PrestoPrincipal(USER, principal.getName())))
                         .build();
             }
             case INSERT_EXISTING:
-                return delegate.getTablePrivileges(user, databaseName, tableName);
+                return delegate.listTablePrivileges(databaseName, tableName, principal);
             case DROP:
                 throw new TableNotFoundException(schemaTableName);
             default:
@@ -823,12 +857,12 @@ public class SemiTransactionalHiveMetastore
         }
     }
 
-    public synchronized void grantTablePrivileges(String databaseName, String tableName, String grantee, Set<HivePrivilegeInfo> privileges)
+    public synchronized void grantTablePrivileges(String databaseName, String tableName, PrestoPrincipal grantee, Set<HivePrivilegeInfo> privileges)
     {
         setExclusive((delegate, hdfsEnvironment) -> delegate.grantTablePrivileges(databaseName, tableName, grantee, privileges));
     }
 
-    public synchronized void revokeTablePrivileges(String databaseName, String tableName, String grantee, Set<HivePrivilegeInfo> privileges)
+    public synchronized void revokeTablePrivileges(String databaseName, String tableName, PrestoPrincipal grantee, Set<HivePrivilegeInfo> privileges)
     {
         setExclusive((delegate, hdfsEnvironment) -> delegate.revokeTablePrivileges(databaseName, tableName, grantee, privileges));
     }
@@ -943,7 +977,7 @@ public class SemiTransactionalHiveMetastore
             }
 
             // Wait for all renames submitted for "INSERT_EXISTING" action to finish
-            committer.waitForAsyncRenames();
+            waitForListenableFutures(committer.getFileRenameFutures());
 
             // At this point, all file system operations, whether asynchronously issued or not, have completed successfully.
             // We are moving on to metastore operations now.
@@ -1006,7 +1040,7 @@ public class SemiTransactionalHiveMetastore
     private class Committer
     {
         private final AtomicBoolean fileRenameCancelled = new AtomicBoolean(false);
-        private final List<CompletableFuture<?>> fileRenameFutures = new ArrayList<>();
+        private final List<ListenableFuture<?>> fileRenameFutures = new ArrayList<>();
 
         // File system
         // For file system changes, only operations outside of writing paths (as specified in declared intentions to write)
@@ -1024,6 +1058,11 @@ public class SemiTransactionalHiveMetastore
 
         // Flag for better error message
         private boolean deleteOnly = true;
+
+        private List<ListenableFuture<?>> getFileRenameFutures()
+        {
+            return ImmutableList.copyOf(fileRenameFutures);
+        }
 
         private void prepareDropTable(SchemaTableName schemaTableName)
         {
@@ -1301,16 +1340,9 @@ public class SemiTransactionalHiveMetastore
             }
         }
 
-        private void waitForAsyncRenames()
-        {
-            for (CompletableFuture<?> fileRenameFuture : fileRenameFutures) {
-                MoreFutures.getFutureValue(fileRenameFuture, PrestoException.class);
-            }
-        }
-
         private void waitForAsyncRenamesSuppressThrowables()
         {
-            for (CompletableFuture<?> future : fileRenameFutures) {
+            for (ListenableFuture<?> future : fileRenameFutures) {
                 try {
                     future.get();
                 }
@@ -1627,38 +1659,24 @@ public class SemiTransactionalHiveMetastore
 
     private static void asyncRename(
             HdfsEnvironment hdfsEnvironment,
-            Executor executor,
+            ListeningExecutorService executor,
             AtomicBoolean cancelled,
-            List<CompletableFuture<?>> fileRenameFutures,
+            List<ListenableFuture<?>> fileRenameFutures,
             HdfsContext context,
             Path currentPath,
             Path targetPath,
             List<String> fileNames)
     {
-        FileSystem fileSystem;
-        try {
-            fileSystem = hdfsEnvironment.getFileSystem(context, currentPath);
-        }
-        catch (IOException e) {
-            throw new PrestoException(HIVE_FILESYSTEM_ERROR, format("Error moving data files to final location. Error listing directory %s", currentPath), e);
-        }
-
+        FileSystem fileSystem = getFileSystem(hdfsEnvironment, context, currentPath);
         for (String fileName : fileNames) {
             Path source = new Path(currentPath, fileName);
             Path target = new Path(targetPath, fileName);
-            fileRenameFutures.add(CompletableFuture.runAsync(() -> {
+            fileRenameFutures.add(executor.submit(() -> {
                 if (cancelled.get()) {
                     return;
                 }
-                try {
-                    if (fileSystem.exists(target) || !fileSystem.rename(source, target)) {
-                        throw new PrestoException(HIVE_FILESYSTEM_ERROR, format("Error moving data files from %s to final location %s", source, target));
-                    }
-                }
-                catch (IOException e) {
-                    throw new PrestoException(HIVE_FILESYSTEM_ERROR, format("Error moving data files from %s to final location %s", source, target), e);
-                }
-            }, executor));
+                renameFile(fileSystem, source, target);
+            }));
         }
     }
 
@@ -1745,7 +1763,9 @@ public class SemiTransactionalHiveMetastore
                 boolean eligible = false;
                 // never delete presto dot files
                 if (!fileName.startsWith(".presto")) {
-                    eligible = filePrefixes.stream().anyMatch(fileName::startsWith);
+                    // file name that starts with ".tmp.presto" is staging file, see HiveWriterFactory#createWriter.
+                    eligible = filePrefixes.stream().anyMatch(prefix ->
+                            fileName.startsWith(prefix) || fileName.startsWith(".tmp.presto." + prefix));
                 }
                 if (eligible) {
                     if (!deleteIfExists(fileSystem, filePath, false)) {

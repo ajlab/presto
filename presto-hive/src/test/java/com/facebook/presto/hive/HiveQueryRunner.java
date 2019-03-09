@@ -16,9 +16,11 @@ package com.facebook.presto.hive;
 import com.facebook.presto.Session;
 import com.facebook.presto.hive.authentication.NoHdfsAuthentication;
 import com.facebook.presto.hive.metastore.Database;
-import com.facebook.presto.hive.metastore.PrincipalType;
 import com.facebook.presto.hive.metastore.file.FileHiveMetastore;
 import com.facebook.presto.metadata.QualifiedObjectName;
+import com.facebook.presto.spi.security.Identity;
+import com.facebook.presto.spi.security.PrincipalType;
+import com.facebook.presto.spi.security.SelectedRole;
 import com.facebook.presto.testing.QueryRunner;
 import com.facebook.presto.tests.DistributedQueryRunner;
 import com.facebook.presto.tpch.TpchPlugin;
@@ -35,9 +37,11 @@ import java.nio.file.Path;
 import java.util.Map;
 import java.util.Optional;
 
+import static com.facebook.presto.spi.security.SelectedRole.Type.ROLE;
 import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
 import static com.facebook.presto.tests.QueryAssertions.copyTpchTables;
 import static com.facebook.presto.tpch.TpchMetadata.TINY_SCHEMA_NAME;
+import static io.airlift.log.Level.WARN;
 import static io.airlift.units.Duration.nanosSince;
 import static java.lang.String.format;
 import static java.util.Locale.ENGLISH;
@@ -80,14 +84,14 @@ public final class HiveQueryRunner
             throws Exception
     {
         assertEquals(DateTimeZone.getDefault(), TIME_ZONE, "Timezone not configured correctly. Add -Duser.timezone=America/Bahia_Banderas to your JVM arguments");
+        setupLogging();
 
         DistributedQueryRunner queryRunner =
-                DistributedQueryRunner.builder(createSession())
+                DistributedQueryRunner.builder(createSession(Optional.of(new SelectedRole(ROLE, Optional.of("admin")))))
                         .setNodeCount(4)
                         .setExtraProperties(extraProperties)
                         .setBaseDataDir(baseDataDir)
                         .build();
-
         try {
             queryRunner.installPlugin(new TpchPlugin());
             queryRunner.createCatalog("tpch", "tpch");
@@ -121,12 +125,12 @@ public final class HiveQueryRunner
 
             if (!metastore.getDatabase(TPCH_SCHEMA).isPresent()) {
                 metastore.createDatabase(createDatabaseMetastoreObject(TPCH_SCHEMA));
-                copyTpchTables(queryRunner, "tpch", TINY_SCHEMA_NAME, createSession(), tables);
+                copyTpchTables(queryRunner, "tpch", TINY_SCHEMA_NAME, createSession(Optional.empty()), tables);
             }
 
             if (!metastore.getDatabase(TPCH_BUCKETED_SCHEMA).isPresent()) {
                 metastore.createDatabase(createDatabaseMetastoreObject(TPCH_BUCKETED_SCHEMA));
-                copyTpchTablesBucketed(queryRunner, "tpch", TINY_SCHEMA_NAME, createBucketedSession(), tables);
+                copyTpchTablesBucketed(queryRunner, "tpch", TINY_SCHEMA_NAME, createBucketedSession(Optional.empty()), tables);
             }
 
             return queryRunner;
@@ -135,6 +139,13 @@ public final class HiveQueryRunner
             queryRunner.close();
             throw e;
         }
+    }
+
+    private static void setupLogging()
+    {
+        Logging logging = Logging.initialize();
+        logging.setLevel("org.apache.parquet.hadoop", WARN);
+        logging.setLevel("parquet.hadoop", WARN);
     }
 
     private static Database createDatabaseMetastoreObject(String name)
@@ -146,17 +157,28 @@ public final class HiveQueryRunner
                 .build();
     }
 
-    public static Session createSession()
+    public static Session createSession(Optional<SelectedRole> role)
     {
         return testSessionBuilder()
+                .setIdentity(new Identity(
+                        "hive",
+                        Optional.empty(),
+                        role.map(selectedRole -> ImmutableMap.of("hive", selectedRole))
+                                .orElse(ImmutableMap.of())))
                 .setCatalog(HIVE_CATALOG)
                 .setSchema(TPCH_SCHEMA)
                 .build();
     }
 
-    public static Session createBucketedSession()
+    public static Session createBucketedSession(Optional<SelectedRole> role)
     {
         return testSessionBuilder()
+                .setIdentity(new Identity(
+                        "hive",
+                        Optional.empty(),
+                        role.map(selectedRole -> ImmutableMap.of("hive", selectedRole))
+                                .orElse(ImmutableMap.of())))
+                .setCatalog(HIVE_CATALOG)
                 .setCatalog(HIVE_BUCKETED_CATALOG)
                 .setSchema(TPCH_BUCKETED_SCHEMA)
                 .build();

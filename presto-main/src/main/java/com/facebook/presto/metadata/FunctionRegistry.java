@@ -146,11 +146,13 @@ import com.facebook.presto.operator.window.WindowFunctionSupplier;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockEncodingSerde;
+import com.facebook.presto.spi.function.FunctionHandle;
+import com.facebook.presto.spi.function.FunctionKind;
 import com.facebook.presto.spi.function.OperatorType;
+import com.facebook.presto.spi.function.Signature;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.spi.type.TypeSignature;
-import com.facebook.presto.spi.type.VarcharType;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.facebook.presto.sql.analyzer.TypeSignatureProvider;
 import com.facebook.presto.sql.tree.QualifiedName;
@@ -176,7 +178,6 @@ import com.facebook.presto.type.TimeWithTimeZoneOperators;
 import com.facebook.presto.type.TimestampOperators;
 import com.facebook.presto.type.TimestampWithTimeZoneOperators;
 import com.facebook.presto.type.TinyintOperators;
-import com.facebook.presto.type.TypeRegistry;
 import com.facebook.presto.type.UnknownOperators;
 import com.facebook.presto.type.VarbinaryOperators;
 import com.facebook.presto.type.VarcharOperators;
@@ -191,12 +192,10 @@ import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableListMultimap;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.Multimaps;
 import com.google.common.collect.Ordering;
-import com.google.common.primitives.Primitives;
 import com.google.common.util.concurrent.UncheckedExecutionException;
 import io.airlift.slice.Slice;
 
@@ -213,10 +212,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static com.facebook.presto.metadata.FunctionKind.AGGREGATE;
-import static com.facebook.presto.metadata.FunctionKind.SCALAR;
-import static com.facebook.presto.metadata.FunctionKind.WINDOW;
-import static com.facebook.presto.metadata.Signature.internalOperator;
+import static com.facebook.presto.metadata.InternalSignatureUtils.internalOperator;
+import static com.facebook.presto.metadata.OperatorSignatureUtils.mangleOperatorName;
 import static com.facebook.presto.metadata.SignatureBinder.applyBoundVariables;
 import static com.facebook.presto.operator.aggregation.ArbitraryAggregationFunction.ARBITRARY_AGGREGATION;
 import static com.facebook.presto.operator.aggregation.ChecksumAggregationFunction.CHECKSUM_AGGREGATION;
@@ -295,13 +292,14 @@ import static com.facebook.presto.operator.window.AggregateWindowFunction.suppli
 import static com.facebook.presto.spi.StandardErrorCode.AMBIGUOUS_FUNCTION_CALL;
 import static com.facebook.presto.spi.StandardErrorCode.FUNCTION_IMPLEMENTATION_MISSING;
 import static com.facebook.presto.spi.StandardErrorCode.FUNCTION_NOT_FOUND;
-import static com.facebook.presto.spi.type.BigintType.BIGINT;
-import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
-import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
+import static com.facebook.presto.spi.function.FunctionKind.AGGREGATE;
+import static com.facebook.presto.spi.function.FunctionKind.SCALAR;
+import static com.facebook.presto.spi.function.FunctionKind.WINDOW;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
-import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
 import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypeSignatures;
 import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
+import static com.facebook.presto.sql.planner.LiteralEncoder.MAGIC_LITERAL_FUNCTION_PREFIX;
+import static com.facebook.presto.sql.planner.LiteralEncoder.getMagicLiteralFunctionSignature;
 import static com.facebook.presto.type.DecimalCasts.BIGINT_TO_DECIMAL_CAST;
 import static com.facebook.presto.type.DecimalCasts.BOOLEAN_TO_DECIMAL_CAST;
 import static com.facebook.presto.type.DecimalCasts.DECIMAL_TO_BIGINT_CAST;
@@ -357,14 +355,8 @@ import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.HOURS;
 
 @ThreadSafe
-public class FunctionRegistry
+class FunctionRegistry
 {
-    private static final String MAGIC_LITERAL_FUNCTION_PREFIX = "$literal$";
-    private static final String OPERATOR_PREFIX = "$operator$";
-
-    // hack: java classes for types that can be used with magic literals
-    private static final Set<Class<?>> SUPPORTED_LITERAL_TYPES = ImmutableSet.of(long.class, double.class, Slice.class, boolean.class);
-
     private final TypeManager typeManager;
     private final LoadingCache<Signature, SpecializedFunctionKey> specializedFunctionKeyCache;
     private final LoadingCache<SpecializedFunctionKey, ScalarFunctionImplementation> specializedScalarCache;
@@ -372,9 +364,13 @@ public class FunctionRegistry
     private final LoadingCache<SpecializedFunctionKey, WindowFunctionSupplier> specializedWindowCache;
     private final MagicLiteralFunction magicLiteralFunction;
     private volatile FunctionMap functions = new FunctionMap();
-    private final FunctionInvokerProvider functionInvokerProvider;
 
-    public FunctionRegistry(TypeManager typeManager, BlockEncodingSerde blockEncodingSerde, FeaturesConfig featuresConfig)
+    public FunctionRegistry(
+            TypeManager typeManager,
+            BlockEncodingSerde blockEncodingSerde,
+            FeaturesConfig featuresConfig,
+            // TODO: Remove FunctionManager once the logic requiring this is moved to FunctionNamespace.
+            FunctionManager functionManager)
     {
         this.typeManager = requireNonNull(typeManager, "typeManager is null");
         this.magicLiteralFunction = new MagicLiteralFunction(blockEncodingSerde);
@@ -395,13 +391,13 @@ public class FunctionRegistry
                 .maximumSize(1000)
                 .expireAfterWrite(1, HOURS)
                 .build(CacheLoader.from(key -> ((SqlScalarFunction) key.getFunction())
-                        .specialize(key.getBoundVariables(), key.getArity(), typeManager, this)));
+                        .specialize(key.getBoundVariables(), key.getArity(), typeManager, functionManager)));
 
         specializedAggregationCache = CacheBuilder.newBuilder()
                 .maximumSize(1000)
                 .expireAfterWrite(1, HOURS)
                 .build(CacheLoader.from(key -> ((SqlAggregationFunction) key.getFunction())
-                        .specialize(key.getBoundVariables(), key.getArity(), typeManager, this)));
+                        .specialize(key.getBoundVariables(), key.getArity(), typeManager, functionManager)));
 
         specializedWindowCache = CacheBuilder.newBuilder()
                 .maximumSize(1000)
@@ -412,7 +408,7 @@ public class FunctionRegistry
                         return supplier(key.getFunction().getSignature(), specializedAggregationCache.getUnchecked(key));
                     }
                     return ((SqlWindowFunction) key.getFunction())
-                            .specialize(key.getBoundVariables(), key.getArity(), typeManager, this);
+                            .specialize(key.getBoundVariables(), key.getArity(), typeManager, functionManager);
                 }));
 
         FunctionListBuilder builder = new FunctionListBuilder()
@@ -473,7 +469,8 @@ public class FunctionRegistry
                 .scalars(SessionFunctions.class)
                 .scalars(StringFunctions.class)
                 .scalars(WordStemFunction.class)
-                .scalar(SplitToMapFunction.class)
+                .scalar(SplitToMapFunction.ResolveDuplicateKeys.class)
+                .scalar(SplitToMapFunction.FailOnDuplicateKeys.class)
                 .scalar(SplitToMultimapFunction.class)
                 .scalars(VarbinaryFunctions.class)
                 .scalars(UrlFunctions.class)
@@ -664,17 +661,6 @@ public class FunctionRegistry
         }
 
         addFunctions(builder.getFunctions());
-
-        if (typeManager instanceof TypeRegistry) {
-            ((TypeRegistry) typeManager).setFunctionRegistry(this);
-        }
-
-        functionInvokerProvider = new FunctionInvokerProvider(this);
-    }
-
-    public FunctionInvokerProvider getFunctionInvokerProvider()
-    {
-        return functionInvokerProvider;
     }
 
     public final synchronized void addFunctions(List<? extends SqlFunction> functions)
@@ -699,7 +685,7 @@ public class FunctionRegistry
         return Iterables.any(functions.get(name), function -> function.getSignature().getKind() == AGGREGATE);
     }
 
-    public Signature resolveFunction(QualifiedName name, List<TypeSignatureProvider> parameterTypes)
+    public FunctionHandle resolveFunction(QualifiedName name, List<TypeSignatureProvider> parameterTypes)
     {
         Collection<SqlFunction> allCandidates = functions.get(name);
         List<SqlFunction> exactCandidates = allCandidates.stream()
@@ -708,7 +694,7 @@ public class FunctionRegistry
 
         Optional<Signature> match = matchFunctionExact(exactCandidates, parameterTypes);
         if (match.isPresent()) {
-            return match.get();
+            return new FunctionHandle(match.get());
         }
 
         List<SqlFunction> genericCandidates = allCandidates.stream()
@@ -717,12 +703,12 @@ public class FunctionRegistry
 
         match = matchFunctionExact(genericCandidates, parameterTypes);
         if (match.isPresent()) {
-            return match.get();
+            return new FunctionHandle(match.get());
         }
 
         match = matchFunctionWithCoercion(allCandidates, parameterTypes);
         if (match.isPresent()) {
-            return match.get();
+            return new FunctionHandle(match.get());
         }
 
         List<String> expectedParameters = new ArrayList<>();
@@ -748,9 +734,8 @@ public class FunctionRegistry
 
             // verify we have one parameter of the proper type
             checkArgument(parameterTypes.size() == 1, "Expected one argument to literal function, but got %s", parameterTypes);
-            Type parameterType = typeManager.getType(parameterTypes.get(0).getTypeSignature());
 
-            return getMagicLiteralFunctionSignature(type);
+            return new FunctionHandle(getMagicLiteralFunctionSignature(type));
         }
 
         throw new PrestoException(FUNCTION_NOT_FOUND, message);
@@ -935,8 +920,9 @@ public class FunctionRegistry
         return true;
     }
 
-    public WindowFunctionSupplier getWindowFunctionImplementation(Signature signature)
+    public WindowFunctionSupplier getWindowFunctionImplementation(FunctionHandle functionHandle)
     {
+        Signature signature = functionHandle.getSignature();
         checkArgument(signature.getKind() == WINDOW || signature.getKind() == AGGREGATE, "%s is not a window function", signature);
         checkArgument(signature.getTypeVariableConstraints().isEmpty(), "%s has unbound type parameters", signature);
 
@@ -949,8 +935,9 @@ public class FunctionRegistry
         }
     }
 
-    public InternalAggregationFunction getAggregateFunctionImplementation(Signature signature)
+    public InternalAggregationFunction getAggregateFunctionImplementation(FunctionHandle functionHandle)
     {
+        Signature signature = functionHandle.getSignature();
         checkArgument(signature.getKind() == AGGREGATE, "%s is not an aggregate function", signature);
         checkArgument(signature.getTypeVariableConstraints().isEmpty(), "%s has unbound type parameters", signature);
 
@@ -1061,18 +1048,12 @@ public class FunctionRegistry
     public List<SqlFunction> listOperators()
     {
         Set<String> operatorNames = Arrays.asList(OperatorType.values()).stream()
-                .map(FunctionRegistry::mangleOperatorName)
+                .map(OperatorSignatureUtils::mangleOperatorName)
                 .collect(toImmutableSet());
 
         return functions.list().stream()
                 .filter(function -> operatorNames.contains(function.getSignature().getName()))
                 .collect(toImmutableList());
-    }
-
-    public boolean canResolveOperator(OperatorType operatorType, Type returnType, List<? extends Type> argumentTypes)
-    {
-        Signature signature = internalOperator(operatorType, returnType, argumentTypes);
-        return isRegistered(signature);
     }
 
     public boolean isRegistered(Signature signature)
@@ -1090,11 +1071,11 @@ public class FunctionRegistry
         }
     }
 
-    public Signature resolveOperator(OperatorType operatorType, List<? extends Type> argumentTypes)
+    public FunctionHandle resolveOperator(OperatorType operatorType, List<? extends Type> argumentTypes)
             throws OperatorNotFoundException
     {
         try {
-            return resolveFunction(QualifiedName.of(mangleOperatorName(operatorType)), fromTypes(argumentTypes));
+            return new FunctionHandle(resolveFunction(QualifiedName.of(mangleOperatorName(operatorType)), fromTypes(argumentTypes)).getSignature());
         }
         catch (PrestoException e) {
             if (e.getErrorCode().getCode() == FUNCTION_NOT_FOUND.toErrorCode().getCode()) {
@@ -1110,84 +1091,23 @@ public class FunctionRegistry
         }
     }
 
-    public Signature getCoercion(Type fromType, Type toType)
+    public FunctionHandle lookupCast(OperatorType castType, TypeSignature fromType, TypeSignature toType)
     {
-        return getCoercion(fromType.getTypeSignature(), toType.getTypeSignature());
-    }
-
-    public Signature getCoercion(TypeSignature fromType, TypeSignature toType)
-    {
-        Signature signature = internalOperator(OperatorType.CAST.name(), toType, ImmutableList.of(fromType));
+        checkArgument(castType == OperatorType.CAST || castType == OperatorType.SATURATED_FLOOR_CAST, format("%s is not a cast type", castType.name()));
+        Signature signature = internalOperator(castType.name(), toType, ImmutableList.of(fromType));
         try {
             getScalarFunctionImplementation(signature);
         }
         catch (PrestoException e) {
             if (e.getErrorCode().getCode() == FUNCTION_IMPLEMENTATION_MISSING.toErrorCode().getCode()) {
-                throw new OperatorNotFoundException(OperatorType.CAST, ImmutableList.of(fromType), toType);
+                throw new OperatorNotFoundException(castType, ImmutableList.of(fromType), toType);
             }
             throw e;
         }
-        return signature;
+        return new FunctionHandle(signature);
     }
 
-    public static Type typeForMagicLiteral(Type type)
-    {
-        Class<?> clazz = type.getJavaType();
-        clazz = Primitives.unwrap(clazz);
-
-        if (clazz == long.class) {
-            return BIGINT;
-        }
-        if (clazz == double.class) {
-            return DOUBLE;
-        }
-        if (!clazz.isPrimitive()) {
-            if (type instanceof VarcharType) {
-                return type;
-            }
-            else {
-                return VARBINARY;
-            }
-        }
-        if (clazz == boolean.class) {
-            return BOOLEAN;
-        }
-        throw new IllegalArgumentException("Unhandled Java type: " + clazz.getName());
-    }
-
-    public static Signature getMagicLiteralFunctionSignature(Type type)
-    {
-        TypeSignature argumentType = typeForMagicLiteral(type).getTypeSignature();
-
-        return new Signature(MAGIC_LITERAL_FUNCTION_PREFIX + type.getTypeSignature(),
-                SCALAR,
-                type.getTypeSignature(),
-                argumentType);
-    }
-
-    public static boolean isSupportedLiteralType(Type type)
-    {
-        return SUPPORTED_LITERAL_TYPES.contains(type.getJavaType());
-    }
-
-    public static String mangleOperatorName(OperatorType operatorType)
-    {
-        return mangleOperatorName(operatorType.name());
-    }
-
-    public static String mangleOperatorName(String operatorName)
-    {
-        return OPERATOR_PREFIX + operatorName;
-    }
-
-    @VisibleForTesting
-    public static OperatorType unmangleOperator(String mangledName)
-    {
-        checkArgument(mangledName.startsWith(OPERATOR_PREFIX), "%s is not a mangled operator name", mangledName);
-        return OperatorType.valueOf(mangledName.substring(OPERATOR_PREFIX.length()));
-    }
-
-    public static Optional<List<Type>> toTypes(List<TypeSignatureProvider> typeSignatureProviders, TypeManager typeManager)
+    private static Optional<List<Type>> toTypes(List<TypeSignatureProvider> typeSignatureProviders, TypeManager typeManager)
     {
         ImmutableList.Builder<Type> resultBuilder = ImmutableList.builder();
         for (TypeSignatureProvider typeSignatureProvider : typeSignatureProviders) {
@@ -1284,9 +1204,9 @@ public class FunctionRegistry
     {
         private final BlockEncodingSerde blockEncodingSerde;
 
-        public MagicLiteralFunction(BlockEncodingSerde blockEncodingSerde)
+        MagicLiteralFunction(BlockEncodingSerde blockEncodingSerde)
         {
-            super(new Signature(MAGIC_LITERAL_FUNCTION_PREFIX, FunctionKind.SCALAR, TypeSignature.parseTypeSignature("R"), TypeSignature.parseTypeSignature("T")));
+            super(new Signature(MAGIC_LITERAL_FUNCTION_PREFIX, SCALAR, TypeSignature.parseTypeSignature("R"), TypeSignature.parseTypeSignature("T")));
             this.blockEncodingSerde = requireNonNull(blockEncodingSerde, "blockEncodingSerde is null");
         }
 
@@ -1309,7 +1229,7 @@ public class FunctionRegistry
         }
 
         @Override
-        public ScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
+        public ScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionManager functionManager)
         {
             Type parameterType = boundVariables.getTypeVariable("T");
             Type type = boundVariables.getTypeVariable("R");

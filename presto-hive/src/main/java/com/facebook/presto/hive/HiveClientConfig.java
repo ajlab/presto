@@ -152,6 +152,10 @@ public class HiveClientConfig
     private boolean isTemporaryStagingDirectoryEnabled = true;
     private String temporaryStagingDirectoryPath = "/tmp/presto-${USER}";
 
+    private boolean preloadSplitsForGroupedExecution;
+
+    private boolean writingStagingFilesEnabled;
+
     public int getMaxInitialSplits()
     {
         return maxInitialSplits;
@@ -245,16 +249,16 @@ public class HiveClientConfig
         return this;
     }
 
+    public boolean getRecursiveDirWalkerEnabled()
+    {
+        return recursiveDirWalkerEnabled;
+    }
+
     @Config("hive.recursive-directories")
     public HiveClientConfig setRecursiveDirWalkerEnabled(boolean recursiveDirWalkerEnabled)
     {
         this.recursiveDirWalkerEnabled = recursiveDirWalkerEnabled;
         return this;
-    }
-
-    public boolean getRecursiveDirWalkerEnabled()
-    {
-        return recursiveDirWalkerEnabled;
     }
 
     public DateTimeZone getDateTimeZone()
@@ -1066,6 +1070,11 @@ public class HiveClientConfig
         return this;
     }
 
+    public boolean getWritesToNonManagedTablesEnabled()
+    {
+        return writesToNonManagedTablesEnabled;
+    }
+
     @Config("hive.non-managed-table-writes-enabled")
     @ConfigDescription("Enable writes to non-managed (external) tables")
     public HiveClientConfig setWritesToNonManagedTablesEnabled(boolean writesToNonManagedTablesEnabled)
@@ -1074,9 +1083,9 @@ public class HiveClientConfig
         return this;
     }
 
-    public boolean getWritesToNonManagedTablesEnabled()
+    public boolean getCreatesOfNonManagedTablesEnabled()
     {
-        return writesToNonManagedTablesEnabled;
+        return createsOfNonManagedTablesEnabled;
     }
 
     @Config("hive.non-managed-table-creates-enabled")
@@ -1087,9 +1096,9 @@ public class HiveClientConfig
         return this;
     }
 
-    public boolean getCreatesOfNonManagedTablesEnabled()
+    public boolean isTableStatisticsEnabled()
     {
-        return createsOfNonManagedTablesEnabled;
+        return tableStatisticsEnabled;
     }
 
     @Config("hive.table-statistics-enabled")
@@ -1098,11 +1107,6 @@ public class HiveClientConfig
     {
         this.tableStatisticsEnabled = tableStatisticsEnabled;
         return this;
-    }
-
-    public boolean isTableStatisticsEnabled()
-    {
-        return tableStatisticsEnabled;
     }
 
     @Min(1)
@@ -1145,6 +1149,11 @@ public class HiveClientConfig
         return this;
     }
 
+    public String getRecordingPath()
+    {
+        return recordingPath;
+    }
+
     @Config("hive.metastore-recording-path")
     public HiveClientConfig setRecordingPath(String recordingPath)
     {
@@ -1152,9 +1161,9 @@ public class HiveClientConfig
         return this;
     }
 
-    public String getRecordingPath()
+    public boolean isReplay()
     {
-        return recordingPath;
+        return replay;
     }
 
     @Config("hive.replay-metastore-recording")
@@ -1164,9 +1173,10 @@ public class HiveClientConfig
         return this;
     }
 
-    public boolean isReplay()
+    @NotNull
+    public Duration getRecordingDuration()
     {
-        return replay;
+        return recordingDuration;
     }
 
     @Config("hive.metastore-recoding-duration")
@@ -1174,12 +1184,6 @@ public class HiveClientConfig
     {
         this.recordingDuration = recordingDuration;
         return this;
-    }
-
-    @NotNull
-    public Duration getRecordingDuration()
-    {
-        return recordingDuration;
     }
 
     public boolean isS3SelectPushdownEnabled()
@@ -1208,6 +1212,11 @@ public class HiveClientConfig
         return this;
     }
 
+    public boolean isTemporaryStagingDirectoryEnabled()
+    {
+        return isTemporaryStagingDirectoryEnabled;
+    }
+
     @Config("hive.temporary-staging-directory-enabled")
     @ConfigDescription("Should use (if possible) temporary staging directory for write operations")
     public HiveClientConfig setTemporaryStagingDirectoryEnabled(boolean temporaryStagingDirectoryEnabled)
@@ -1216,9 +1225,10 @@ public class HiveClientConfig
         return this;
     }
 
-    public boolean isTemporaryStagingDirectoryEnabled()
+    @NotNull
+    public String getTemporaryStagingDirectoryPath()
     {
-        return isTemporaryStagingDirectoryEnabled;
+        return temporaryStagingDirectoryPath;
     }
 
     @Config("hive.temporary-staging-directory-path")
@@ -1229,9 +1239,29 @@ public class HiveClientConfig
         return this;
     }
 
-    @NotNull
-    public String getTemporaryStagingDirectoryPath()
+    public boolean isPreloadSplitsForGroupedExecution()
     {
-        return temporaryStagingDirectoryPath;
+        return preloadSplitsForGroupedExecution;
+    }
+
+    @Config("hive.preload-splits-for-grouped-execution")
+    @ConfigDescription("Preload splits before scheduling for grouped execution")
+    public HiveClientConfig setPreloadSplitsForGroupedExecution(boolean preloadSplitsForGroupedExecution)
+    {
+        this.preloadSplitsForGroupedExecution = preloadSplitsForGroupedExecution;
+        return this;
+    }
+
+    public boolean isWritingStagingFilesEnabled()
+    {
+        return writingStagingFilesEnabled;
+    }
+
+    @Config("hive.writing-staging-files-enabled")
+    @ConfigDescription("Write data to staging files and rename to target files when commit")
+    public HiveClientConfig setWritingStagingFilesEnabled(boolean writingStagingFilesEnabled)
+    {
+        this.writingStagingFilesEnabled = writingStagingFilesEnabled;
+        return this;
     }
 }

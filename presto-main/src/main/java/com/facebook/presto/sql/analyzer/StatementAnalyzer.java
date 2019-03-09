@@ -17,7 +17,6 @@ import com.facebook.presto.Session;
 import com.facebook.presto.SystemSessionProperties;
 import com.facebook.presto.connector.ConnectorId;
 import com.facebook.presto.execution.warnings.WarningCollector;
-import com.facebook.presto.metadata.FunctionKind;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.OperatorNotFoundException;
 import com.facebook.presto.metadata.QualifiedObjectName;
@@ -31,6 +30,7 @@ import com.facebook.presto.spi.CatalogSchemaName;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.function.FunctionKind;
 import com.facebook.presto.spi.function.OperatorType;
 import com.facebook.presto.spi.security.AccessDeniedException;
 import com.facebook.presto.spi.security.Identity;
@@ -95,6 +95,7 @@ import com.facebook.presto.sql.tree.Prepare;
 import com.facebook.presto.sql.tree.Property;
 import com.facebook.presto.sql.tree.QualifiedName;
 import com.facebook.presto.sql.tree.Query;
+import com.facebook.presto.sql.tree.QueryBody;
 import com.facebook.presto.sql.tree.QuerySpecification;
 import com.facebook.presto.sql.tree.Relation;
 import com.facebook.presto.sql.tree.RenameColumn;
@@ -125,7 +126,6 @@ import com.facebook.presto.sql.tree.WindowFrame;
 import com.facebook.presto.sql.tree.With;
 import com.facebook.presto.sql.tree.WithQuery;
 import com.facebook.presto.sql.util.AstUtils;
-import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableMultimap;
@@ -137,7 +137,6 @@ import com.google.common.collect.Multimap;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -145,11 +144,11 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import static com.facebook.presto.SystemSessionProperties.getMaxGroupingSets;
-import static com.facebook.presto.metadata.FunctionKind.AGGREGATE;
-import static com.facebook.presto.metadata.FunctionKind.WINDOW;
 import static com.facebook.presto.metadata.MetadataUtil.createQualifiedObjectName;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_FOUND;
+import static com.facebook.presto.spi.function.FunctionKind.AGGREGATE;
+import static com.facebook.presto.spi.function.FunctionKind.WINDOW;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
@@ -211,7 +210,6 @@ import static com.google.common.base.Throwables.throwIfInstanceOf;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Iterables.getLast;
-import static com.google.common.collect.Iterables.transform;
 import static java.lang.Math.toIntExact;
 import static java.lang.String.format;
 import static java.util.Collections.emptyList;
@@ -338,44 +336,69 @@ class StatementAnalyzer
                 insertColumns = tableColumns;
             }
 
+            List<ColumnMetadata> expectedColumns = insertColumns.stream()
+                    .map(insertColumn -> tableMetadata.getColumn(insertColumn))
+                    .collect(toImmutableList());
+
+            checkTypesMatchForInsert(insert, queryScope, expectedColumns);
+
             Map<String, ColumnHandle> columnHandles = metadata.getColumnHandles(session, targetTableHandle.get());
             analysis.setInsert(new Analysis.Insert(
                     targetTableHandle.get(),
                     insertColumns.stream().map(columnHandles::get).collect(toImmutableList())));
 
-            Iterable<Type> tableTypes = insertColumns.stream()
-                    .map(insertColumn -> tableMetadata.getColumn(insertColumn).getType())
-                    .collect(toImmutableList());
-
-            Iterable<Type> queryTypes = transform(queryScope.getRelationType().getVisibleFields(), Field::getType);
-
-            if (!typesMatchForInsert(tableTypes, queryTypes)) {
-                throw new SemanticException(MISMATCHED_SET_COLUMN_TYPES, insert, "Insert query has mismatched column types: " +
-                        "Table: [" + Joiner.on(", ").join(tableTypes) + "], " +
-                        "Query: [" + Joiner.on(", ").join(queryTypes) + "]");
-            }
-
             return createAndAssignScope(insert, scope, Field.newUnqualified("rows", BIGINT));
         }
 
-        private boolean typesMatchForInsert(Iterable<Type> tableTypes, Iterable<Type> queryTypes)
+        private void checkTypesMatchForInsert(Insert insert, Scope queryScope, List<ColumnMetadata> expectedColumns)
         {
-            if (Iterables.size(tableTypes) != Iterables.size(queryTypes)) {
-                return false;
+            List<Type> queryColumnTypes = queryScope.getRelationType().getVisibleFields().stream()
+                    .map(Field::getType)
+                    .collect(toImmutableList());
+
+            String errorMessage = "";
+            if (expectedColumns.size() != queryColumnTypes.size()) {
+                errorMessage = format("Insert query has %d expression(s) but expected %d target column(s). ",
+                        queryColumnTypes.size(), expectedColumns.size());
             }
 
-            Iterator<Type> tableTypesIterator = tableTypes.iterator();
-            Iterator<Type> queryTypesIterator = queryTypes.iterator();
-            while (tableTypesIterator.hasNext()) {
-                Type tableType = tableTypesIterator.next();
-                Type queryType = queryTypesIterator.next();
-
-                if (!metadata.getTypeManager().canCoerce(queryType, tableType)) {
-                    return false;
+            for (int i = 0; i < Math.max(expectedColumns.size(), queryColumnTypes.size()); i++) {
+                Node node = insert;
+                QueryBody queryBody = insert.getQuery().getQueryBody();
+                if (queryBody instanceof Values) {
+                    List<Expression> rows = ((Values) queryBody).getRows();
+                    checkState(!rows.isEmpty(), "Missing column values");
+                    node = rows.get(0);
+                    if (node instanceof Row) {
+                        int columnIndex = Math.min(i, queryColumnTypes.size() - 1);
+                        node = ((Row) rows.get(0)).getItems().get(columnIndex);
+                    }
+                }
+                if (i == expectedColumns.size()) {
+                    throw new SemanticException(MISMATCHED_SET_COLUMN_TYPES,
+                            node,
+                            errorMessage + "Mismatch at column %d",
+                            i + 1);
+                }
+                if (i == queryColumnTypes.size()) {
+                    throw new SemanticException(MISMATCHED_SET_COLUMN_TYPES,
+                            node,
+                            errorMessage + "Mismatch at column %d: '%s'",
+                            i + 1,
+                            expectedColumns.get(i).getName());
+                }
+                if (!metadata.getTypeManager().canCoerce(
+                        queryColumnTypes.get(i),
+                        expectedColumns.get(i).getType())) {
+                    throw new SemanticException(MISMATCHED_SET_COLUMN_TYPES,
+                            node,
+                            errorMessage + "Mismatch at column %d: '%s' is of type %s but expression is of type %s",
+                            i + 1,
+                            expectedColumns.get(i).getName(),
+                            expectedColumns.get(i).getType(),
+                            queryColumnTypes.get(i));
                 }
             }
-
-            return true;
         }
 
         @Override
@@ -1041,7 +1064,7 @@ class StatementAnalyzer
                 // and when aggregation is present, ORDER BY expressions should only be resolvable against
                 // output scope, group by expressions and aggregation expressions.
                 List<GroupingOperation> orderByGroupingOperations = extractExpressions(orderByExpressions, GroupingOperation.class);
-                List<FunctionCall> orderByAggregations = extractAggregateFunctions(orderByExpressions, metadata.getFunctionRegistry());
+                List<FunctionCall> orderByAggregations = extractAggregateFunctions(orderByExpressions, metadata.getFunctionManager());
                 computeAndAssignOrderByScopeWithAggregation(node.getOrderBy().get(), sourceScope, outputScope, orderByAggregations, groupByExpressions, orderByGroupingOperations);
             }
 
@@ -1178,7 +1201,7 @@ class StatementAnalyzer
                     analysis.addCoercion(expression, BOOLEAN, false);
                 }
 
-                Analyzer.verifyNoAggregateWindowOrGroupingFunctions(metadata.getFunctionRegistry(), expression, "JOIN clause");
+                Analyzer.verifyNoAggregateWindowOrGroupingFunctions(metadata.getFunctionManager(), expression, "JOIN clause");
 
                 analysis.recordSubqueries(node, expressionAnalysis);
                 analysis.setJoinCriteria(node, expression);
@@ -1215,7 +1238,7 @@ class StatementAnalyzer
 
                 // ensure a comparison operator exists for the given types (applying coercions if necessary)
                 try {
-                    metadata.getFunctionRegistry().resolveOperator(OperatorType.EQUAL, ImmutableList.of(
+                    metadata.getFunctionManager().resolveOperator(OperatorType.EQUAL, ImmutableList.of(
                             leftField.get().getType(), rightField.get().getType()));
                 }
                 catch (OperatorNotFoundException e) {
@@ -1387,7 +1410,7 @@ class StatementAnalyzer
 
                 List<TypeSignature> argumentTypes = Lists.transform(windowFunction.getArguments(), expression -> analysis.getType(expression).getTypeSignature());
 
-                FunctionKind kind = metadata.getFunctionRegistry().resolveFunction(windowFunction.getName(), fromTypeSignatures(argumentTypes)).getKind();
+                FunctionKind kind = metadata.getFunctionManager().resolveFunction(windowFunction.getName(), fromTypeSignatures(argumentTypes)).getKind();
                 if (kind != AGGREGATE && kind != WINDOW) {
                     throw new SemanticException(MUST_BE_WINDOW_FUNCTION, node, "Not a window function: %s", windowFunction.getName());
                 }
@@ -1570,7 +1593,7 @@ class StatementAnalyzer
                                 sets.add(ImmutableList.of(ImmutableSet.of(field)));
                             }
                             else {
-                                Analyzer.verifyNoAggregateWindowOrGroupingFunctions(metadata.getFunctionRegistry(), column, "GROUP BY clause");
+                                Analyzer.verifyNoAggregateWindowOrGroupingFunctions(metadata.getFunctionManager(), column, "GROUP BY clause");
                                 analysis.recordSubqueries(node, analyzeExpression(column, scope));
                                 complexExpressions.add(column);
                             }
@@ -1805,7 +1828,7 @@ class StatementAnalyzer
 
         public void analyzeWhere(Node node, Scope scope, Expression predicate)
         {
-            Analyzer.verifyNoAggregateWindowOrGroupingFunctions(metadata.getFunctionRegistry(), predicate, "WHERE clause");
+            Analyzer.verifyNoAggregateWindowOrGroupingFunctions(metadata.getFunctionManager(), predicate, "WHERE clause");
 
             ExpressionAnalysis expressionAnalysis = analyzeExpression(predicate, scope);
             analysis.recordSubqueries(node, expressionAnalysis);
@@ -1856,7 +1879,7 @@ class StatementAnalyzer
         {
             checkState(orderByExpressions.isEmpty() || orderByScope.isPresent(), "non-empty orderByExpressions list without orderByScope provided");
 
-            List<FunctionCall> aggregates = extractAggregateFunctions(Iterables.concat(outputExpressions, orderByExpressions), metadata.getFunctionRegistry());
+            List<FunctionCall> aggregates = extractAggregateFunctions(Iterables.concat(outputExpressions, orderByExpressions), metadata.getFunctionManager());
             analysis.setAggregates(node, aggregates);
 
             if (analysis.isAggregation(node)) {
@@ -1893,7 +1916,7 @@ class StatementAnalyzer
 
             node.getHaving().ifPresent(toExtractBuilder::add);
 
-            List<FunctionCall> aggregates = extractAggregateFunctions(toExtractBuilder.build(), metadata.getFunctionRegistry());
+            List<FunctionCall> aggregates = extractAggregateFunctions(toExtractBuilder.build(), metadata.getFunctionManager());
 
             return !aggregates.isEmpty();
         }
