@@ -236,7 +236,7 @@ public class StatementResource
                QueryResults queryResults = queryResultsFuture.get();
                Runnable r = () -> acacheLastResults(queryResults, tokens, token.getAsLong());
                response.addListener(r, directExecutor());
-               //acacheLastResults(queryResultsFuture.get(), tokens, token.getAsLong());
+               acacheLastResults(queryResultsFuture.get(), tokens, token.getAsLong());
            } catch (InterruptedException ie) {
                System.out.println("Exception caching results: " + ie);
            } catch (ExecutionException ee ) {}
