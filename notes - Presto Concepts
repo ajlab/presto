@@ -8,4 +8,19 @@ It is the node to which a client connects to submit statements for execution. It
 It creates a logical model of a query involving a series of stages which is then translated into a series of connected tasks running on a cluster of Presto workers. 
 Coordinators communicate with workers and clients using a REST API. 
 
+Worker: A Presto worker is a server in the Presto installation which is responsible for executing tasks and processing data. Worker nodes fetch data from the connectors and exchange intermediate data with each other. The coordinator is responsible for fetching results from the workers and returning the final results to the client. When a Presto worker starts up, it advertises itself to the discovery server in the coordinator, which makes it available to the Presto coordinator for task execution. Workers coordinate with other workers and Presto coordinators using a REST API.
+
+Connector: A connector adapts Presto to a data source such as Hive or a relational database. You can think of a connector the same way you think of a driver for a database. It is an implementation of Presto's SPI which allows Presto to interact with a resource using a standard API. Presto contains several built in connectors: a connector for JMX, a System connector which provides access to built-in system tables, a Hive connector, and a TPCH connector designed to serve TPC-H benchmark data. 
+
 Abstract Syntax Tree (AST) is converted into the Plan Tree after analyze step. There is no seperation between LogicalPlan and ExecutionPlan so the PlanNode contains lot of optional information filled in for execution. This causes plan to be very complex, which contradicts Presto's principle of connector: hiding as much implementation details of engine from connector as possible.
+
+Hive Connector:
+
+Hive connector allows querying data stored in Hive data warehouse. Hive is a combination of 3 components:
+i) Data files in varying formats that are typically stored in the Hadoop Distributed File System (HDFS) or in AWS S3.
+ii) Metadata about how the data files are mapped to schemas and tables. This metadata is stored in a databaase such as MySQL and is accessed via the Hive metastore service.
+iii) A query language called HiveQL. This query language is executed on a distributed computing framework such a MapReduce or Tez.
+
+Presto only uses the first two components: the data and the metadata. It does not use HiveQL or any part of Hive's execution environment.
+
+Following file types are supported for the Hive connector: ORC, Parquet, Avro, RCFile, SequenceFile, JSON, text.

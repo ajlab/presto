@@ -1,0 +1,61 @@
+[INFO] Reactor Build Order:
+[INFO] 
+[INFO] presto-root                                                        [pom]
+[INFO] presto-spi                                                         [jar]
+[INFO] presto-plugin-toolkit                                              [jar]
+[INFO] presto-client                                                      [jar]
+[INFO] presto-parser                                                      [jar]
+[INFO] presto-geospatial-toolkit                                          [jar] #skip
+[INFO] presto-array                                                       [jar]
+[INFO] presto-matching                                                    [jar]
+[INFO] presto-memory-context                                              [jar]
+[INFO] presto-tpch                                              [presto-plugin]
+[INFO] presto-main                                                        [jar]
+[INFO] presto-resource-group-managers                           [presto-plugin]
+[INFO] presto-tests                                                       [jar]#Failed
+[INFO] presto-atop                                              [presto-plugin]
+[INFO] presto-jmx                                               [presto-plugin]
+[INFO] presto-record-decoder                                              [jar]
+[INFO] presto-kafka                                             [presto-plugin] #skip
+[INFO] presto-redis                                             [presto-plugin]
+[INFO] presto-accumulo                                          [presto-plugin] #skip
+[INFO] presto-cassandra                                         [presto-plugin] #skip
+[INFO] presto-blackhole                                         [presto-plugin] #skip
+[INFO] presto-memory                                            [presto-plugin]
+[INFO] presto-orc                                                         [jar]
+[INFO] presto-benchmark                                                   [jar] #failed
+[INFO] presto-parquet                                                     [jar]
+[INFO] presto-rcfile                                                      [jar]
+[INFO] presto-hive                                                        [jar]
+[INFO] presto-hive-hadoop2                                      [presto-plugin]
+[INFO] presto-teradata-functions                                [presto-plugin] #skip
+[INFO] presto-example-http                                      [presto-plugin]
+[INFO] presto-local-file                                        [presto-plugin]
+[INFO] presto-tpcds                                             [presto-plugin] #skip
+[INFO] presto-raptor                                            [presto-plugin] #skip
+[INFO] presto-base-jdbc                                                   [jar]
+[INFO] presto-mysql                                             [presto-plugin]
+[INFO] presto-postgresql                                        [presto-plugin] #skipped
+[INFO] presto-redshift                                          [presto-plugin] #skipped
+[INFO] presto-sqlserver                                         [presto-plugin] #skipped
+[INFO] presto-mongodb                                           [presto-plugin] #skipped
+[INFO] presto-ml                                                [presto-plugin] #skipped
+[INFO] presto-geospatial                                        [presto-plugin] #skipped
+[INFO] presto-jdbc                                                        [jar]
+[INFO] presto-cli                                                         [jar]
+[INFO] presto-product-tests                                               [jar] #skipped
+[INFO] presto-benchmark-driver                                            [jar] #skipped
+[INFO] presto-thrift-connector-api                                        [jar]
+[INFO] presto-thrift-testing-server                                       [jar] #skipped
+[INFO] presto-thrift-connector                                  [presto-plugin]
+[INFO] presto-password-authenticators                           [presto-plugin] #skip
+[INFO] presto-session-property-managers                         [presto-plugin]
+[INFO] presto-kudu                                              [presto-plugin] #skipped
+[INFO] presto-elasticsearch                                     [presto-plugin] #skipped
+[INFO] presto-server                                                 [provisio]
+[INFO] presto-server-rpm                                                  [rpm] #skipped
+[INFO] presto-docs                                                        [pom] #failed
+[INFO] presto-verifier                                                    [jar] #skipped
+[INFO] presto-testing-server-launcher                                     [jar] #skipped
+[INFO] presto-benchto-benchmarks                                          [jar] #skipped
+[INFO] presto-proxy                                                       [jar] #skipped

@@ -1,0 +1,96 @@
+Hive Metastore Memory Debugging
+
+Running:
+~/tools/apache-hive-2.3.4-bin/bin/hive --service metastore &
+
+Debugging Tools:
+ps -ef|grep java
+top -o +%MEM
+jconsole or /usr/lib/jvm/java-8-openjdk-amd64/bin/jconsole
+-XX:NativeMemoryTracking=summary
+jcmd <pid> VM.native_memory baseline
+jcmd <pid> VM.native_memory summary
+
+Workflow:
+HADOOP=hadoop-3.1.1/bin/hadoop
+CLASS=org.apache.hadoop.hive.metastore.HiveMetaStore
+JAR=~/mac_user_dir/tools/apache-hive-2.3.4-bin/lib/hive-metastore-2.3.4.jar
+bin/hive -> bin/ext/metastore.sh -> exec $HADOOP jar $JAR $CLASS "$@" > Runs HiveMetaStore in hive-metastore-2.3.4.jar
+
+
+Observations:
+Heap memmory usage range: Started at ~18mb, went up to 60mb, then dropped to ~16mb.
+Non Heap memory usage: ~51mb
+Live threads: ~20
+Starting Hadoop processes does not affect memory consumption of Hive Metastore.
+Performing explict GC causes heap size to drop immediately, but also causes largest spike in CPU usage.
+
+Problems:
+1: Redundant Jars.
+Many (but not all) jars are present twice in classpath, ex:
+hadoop-3.1.1/share/hadoop/common/lib/guava-11.0.2.jar
+hadoop-3.1.1/share/hadoop/hdfs/lib/guava-11.0.2.jar
+hadoop-3.1.1/share/hadoop/common/lib/hadoop-auth-3.1.1.jar
+hadoop-3.1.1/share/hadoop/hdfs/lib/hadoop-auth-3.1.1.jar
+Loaded thrice:
+apache-hive-2.3.4-bin/lib/jackson-xc-1.9.13.jar
+hadoop-3.1.1/share/hadoop/common/lib/jackson-xc-1.9.13.jar
+hadoop-3.1.1/share/hadoop/hdfs/lib/jackson-xc-1.9.13.jar
+Solution:
+Removed redundant jars (no. of files dropped to 449 from 489). No noticable drop in memory.
+Solution: Works (2m drop)
+Removed duplicate jars.
+
+2: 245MB Heap size. 
+Solution:
+i) Doesn't work.
+Set heap size to 80mb by adding this to the bottom of 'bin/hive-config.sh':
+export HADOOP_HEAPSIZE=${HADOOP_HEAPSIZE:-80} > Opposite effect, RES jumps to ~400m after this.
+
+ii) Works (35m drop)
+HADOOP_OPTS+=" -XX:-TieredCompilation" in 'function hadoop_java_exec'
+Desc: Reduces the amount of compiled code and thus code cache usage.
+Outcome: Adding this flag to HADOOP_OPTS reduced RES from ~245m to ~210m.
+
+iii) Doesn't work.
+ -XX:ReservedCodeCacheSize=3m
+ Desc: Contains dynamically generated code. 
+ Reason: Maybe using '-TieredCompilation' also causes dynamically generated code to reduce.
+
+iv) Doesn't work.
+ -XX:-TieredCompilation -Xss228k
+ Desc: sets the thread stack size.
+ Reason: ?
+
+ v) Doesn't work.
+ -Xmaxjitcodesize=240m
+ Desc: specifies max code cache size.
+ Reason: Tiered compilation is already disabled, thus its value is 48m.
+
+ vi) Doesn't work.
+  -XX:MaxDirectMemorySize=1k
+ Desc: sets the max total size (in bytes) of the new I/O (java.nio package) direct-buffer allocations.
+ Reason: JVM chooses the size of NIO direct-buffer allocations automatically
+
+vii) Works (78m drop)
+ -Xmn100k
+Desc: Sets the initial and max size of the heap for the young generation.
+Outcome: Adding this flag to HADOOP_OPTS reduced RES from ~210m to ~132m.
+
+viii) Works (5m drop)
+-XX:MaxMetaspaceSize=64m
+Desc: max amount for class metadata.
+Outcome: Reduced RES from ~132m to ~127m.
+
+Hive HiveServer2 Memory Debugging
+
+Running:
+~/tools/apache-hive-2.3.4-bin/bin/hive --service hiveserver2 &
+
+Problems:
+1. 250MB Heap Size
+Solution:
+i) Works (88m drop) 
+setting HADOOP_OPTS+=" -XX:-TieredCompilation -Xmn100k" in 'hadoop_java_exec' drops memory consumptions to 164m.
+Adding dedup method applied in metastore increases RES.
+
