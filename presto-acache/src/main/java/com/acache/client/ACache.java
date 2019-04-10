@@ -22,21 +22,63 @@ import io.airlift.log.Logger;
 import redis.clients.jedis.BinaryJedis;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.ObjectOutput;
 import java.io.ObjectOutputStream;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
+
+import static com.acache.utils.PropertiesUtil.loadProperties;
+import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Strings.isNullOrEmpty;
 
 public class ACache
         implements Plugin
 {
     private static final Logger log = Logger.get(ACache.class);
-    BinaryJedis jedis = new BinaryJedis("localhost", 6379);
+    private static final File REDIS_CONF = new File("etc/redis.properties");
+    BinaryJedis jedis;
     ObjectMapper om = new ObjectMapper();
     String query;
     private int callCount;
+    private String host;
+    private Integer port;
+    private String redisPassword;
+
+    public ACache()
+    {
+        this.loadRedisProperties();
+        this.jedis = new BinaryJedis(this.host, this.port);
+        if (!isNullOrEmpty(this.redisPassword)) {
+            this.jedis.auth(this.redisPassword);
+        }
+    }
+
+    public void loadRedisProperties()
+    {
+        if (REDIS_CONF.exists()) {
+            Map<String, String> properties = null;
+            try {
+                properties = new HashMap<>(loadProperties(REDIS_CONF));
+                for (Map.Entry<String, String> me : properties.entrySet()) {
+                }
+            }
+            catch (IOException e) {
+                log.error("couldn't read properties: " + e);
+            }
+            String host = properties.get("host");
+            String port = properties.get("port");
+            checkArgument(!isNullOrEmpty(host),
+                    "Cache configuration %s does not contain %s", REDIS_CONF.getAbsoluteFile(), "host");
+            this.host = host;
+            this.port = new Integer(port);
+            this.redisPassword = properties.get("password");
+        }
+    }
 
     public String getQuery()
     {

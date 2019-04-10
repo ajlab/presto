@@ -398,7 +398,7 @@
         <dependency>
             <groupId>com.acache.client</groupId>
             <artifactId>presto-acache</artifactId>
-            <version>0.217-SNAPSHOT</version>
+            <version>0.220-SNAPSHOT</version>
         </dependency>
 
     </dependencies>
