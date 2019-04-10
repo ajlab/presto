@@ -64,8 +64,6 @@ public class ACache
             Map<String, String> properties = null;
             try {
                 properties = new HashMap<>(loadProperties(REDIS_CONF));
-                for (Map.Entry<String, String> me : properties.entrySet()) {
-                }
             }
             catch (IOException e) {
                 log.error("couldn't read properties: " + e);
