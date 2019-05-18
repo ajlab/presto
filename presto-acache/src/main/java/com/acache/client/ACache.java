@@ -21,8 +21,10 @@ import com.google.common.collect.Iterables;
 import io.airlift.log.Logger;
 import redis.clients.jedis.BinaryJedis;
 
+import java.io.BufferedWriter;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.ObjectOutput;
 import java.io.ObjectOutputStream;
@@ -40,30 +42,31 @@ public class ACache
         implements Plugin
 {
     private static final Logger log = Logger.get(ACache.class);
-    private static final File REDIS_CONF = new File("etc/redis.properties");
+    private static final File CACHE_CONF = new File("etc/acache.properties");
     BinaryJedis jedis;
     ObjectMapper om = new ObjectMapper();
     String query;
     private int callCount;
     private String host;
     private Integer port;
-    private String redisPassword;
+    private String password;
+    private String reqLogDir;
 
     public ACache()
     {
         this.loadRedisProperties();
         this.jedis = new BinaryJedis(this.host, this.port);
-        if (!isNullOrEmpty(this.redisPassword)) {
-            this.jedis.auth(this.redisPassword);
+        if (!isNullOrEmpty(this.password)) {
+            this.jedis.auth(this.password);
         }
     }
 
     public void loadRedisProperties()
     {
-        if (REDIS_CONF.exists()) {
+        if (CACHE_CONF.exists()) {
             Map<String, String> properties = null;
             try {
-                properties = new HashMap<>(loadProperties(REDIS_CONF));
+                properties = new HashMap<>(loadProperties(CACHE_CONF));
             }
             catch (IOException e) {
                 log.error("couldn't read properties: " + e);
@@ -71,10 +74,11 @@ public class ACache
             String host = properties.get("host");
             String port = properties.get("port");
             checkArgument(!isNullOrEmpty(host),
-                    "Cache configuration %s does not contain %s", REDIS_CONF.getAbsoluteFile(), "host");
+                    "Cache configuration %s does not contain %s", CACHE_CONF.getAbsoluteFile(), "host");
             this.host = host;
             this.port = new Integer(port);
-            this.redisPassword = properties.get("password");
+            this.password = properties.get("password");
+            this.reqLogDir = properties.get("reqLogDir");
         }
     }
 
@@ -106,6 +110,11 @@ public class ACache
             return null;
         }
         return mergedResults;
+    }
+
+    public void logRequest()
+    {
+        writeToFile();
     }
 
     private byte[] generateSetKey()
@@ -158,6 +167,22 @@ public class ACache
                 mergedQueryResults.getColumns(), mergedData, mergedQueryResults.getStats(), mergedQueryResults.getError(),
                 mergedQueryResults.getWarnings(), mergedQueryResults.getUpdateType(), mergedQueryResults.getUpdateCount());
         return newMergedQueryResults;
+    }
+
+    private void writeToFile()
+    {
+        File f = new File(this.reqLogDir);
+        try {
+            FileWriter fw = new FileWriter(f, true);
+            BufferedWriter bw = new BufferedWriter(fw);
+            bw.write(this.query + ";");
+            bw.newLine();
+            bw.close();
+        }
+        catch (IOException ioe) {
+            log.error("Error writing file: " + ioe);
+            ioe.printStackTrace();
+        }
     }
 
     /* TODO: Fix or Remove.

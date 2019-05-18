@@ -23,7 +23,6 @@ Without Cache: 0.03
 iv) 
 Query:
 select review.user_id, count(distinct review_id) from review, users where review.user_id=users.user_id group by review.user_id;
-select review.user_id, count(distinct review_id) from review, users where review.user_id=users.user_id and review.date>'2018-06-01' group by review.user_id;
 Type: 1-Join
 System: Azure 3.75G RAM, 3-node Hadoop
 Runtime:
@@ -35,5 +34,7 @@ Query:
 select review.user_id, count(distinct review_id) from review, users where review.user_id=users.user_id and review.date>'2018-06-01' group by review.user_id;
 Type: 1-Join
 System: Azure 3.75G RAM, 3-node Hadoop
+Output Rows: 78.8k
 Runtime:
 Without Cache: 12s
+With Cache: <1s

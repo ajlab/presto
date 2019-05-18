@@ -174,6 +174,7 @@ public class StatementResource
         queries.put(query.getQueryId(), query);
         acache = new ACache();
         acache.setQuery(statement);
+        acache.logRequest();
 
         QueryResults queryResults = query.getNextResult(OptionalLong.empty(), uriInfo, proto, DEFAULT_TARGET_RESULT_SIZE);
         return toResponse(query, queryResults);
@@ -236,11 +237,14 @@ public class StatementResource
                QueryResults queryResults = queryResultsFuture.get();
                Runnable r = () -> acacheLastResults(queryResults, tokens, token.getAsLong());
                response.addListener(r, directExecutor());
-               acacheLastResults(queryResultsFuture.get(), tokens, token.getAsLong());
+               //acacheLastResults(queryResultsFuture.get(), tokens, token.getAsLong());
            } catch (InterruptedException ie) {
                System.out.println("Exception caching results: " + ie);
            } catch (ExecutionException ee ) {}
            }
+        //if (tokens.isEmpty()) {
+        //    acache.logRequest();
+        //}
     }
 
     private synchronized void acacheLastResults(QueryResults queryResults, Set<Long> tokens, long token)
